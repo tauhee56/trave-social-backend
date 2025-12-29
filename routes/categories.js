@@ -1,18 +1,29 @@
 const express = require('express');
 const router = express.Router();
 
-// Example categories (replace with DB fetch if needed)
-const categories = [
-  { id: '1', name: 'Travel' },
-  { id: '2', name: 'Food' },
-  { id: '3', name: 'Adventure' },
-  { id: '4', name: 'Culture' },
-  { id: '5', name: 'Nature' }
-];
 
-// GET /api/categories - Return all categories
-router.get('/', (req, res) => {
-  res.json({ success: true, data: categories });
+const Category = require('../models/Category');
+
+// GET /api/categories - Return all categories from DB
+router.get('/', async (req, res) => {
+  try {
+    const categories = await Category.find();
+    res.json({ success: true, data: categories });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
+// POST /api/categories - Add a new category
+router.post('/', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const category = new Category({ name });
+    await category.save();
+    res.json({ success: true, data: category });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = router;

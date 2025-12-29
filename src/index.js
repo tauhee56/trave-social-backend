@@ -108,7 +108,7 @@ try {
 
 // Existing routes (each wrapped in try-catch for safety)
 try {
-  app.use('/api/posts', require('./routes/post'));
+  app.use('/api/posts', require('../routes/posts'));
   console.log('  ✅ /api/posts loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/posts error:', err.message);

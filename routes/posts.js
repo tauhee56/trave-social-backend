@@ -1,21 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
+const Post = require('../models/Post');
 
-// Post model (define properly in models/Post.js in real use)
-let Post;
-try {
-  Post = mongoose.model('Post');
-} catch {
-  Post = mongoose.model('Post', new mongoose.Schema({
-    userId: String,
-    content: String,
-    imageUrl: String,
-    likes: { type: Number, default: 0 },
-    comments: { type: Number, default: 0 },
-    createdAt: { type: Date, default: Date.now },
-  }));
-}
 
 // GET /api/posts - Get all posts
 router.get('/', async (req, res) => {
@@ -75,32 +61,21 @@ router.post('/:postId/like', async (req, res) => {
   try {
     const { postId } = req.params;
     const { userId } = req.body;
-    
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
-    // Convert postId to ObjectId
-    const objectId = mongoose.Types.ObjectId.isValid(postId) ? new mongoose.Types.ObjectId(postId) : postId;
-    
-    const db = mongoose.connection.db;
-    const postsCollection = db.collection('posts');
-    
-    // Add user to likes array if not already there
-    const post = await postsCollection.findOneAndUpdate(
-      { _id: objectId },
+    const post = await Post.findByIdAndUpdate(
+      postId,
       {
-        $addToSet: { likes: userId },  // Only add if not already in array
+        $addToSet: { likes: userId },
         $inc: { likesCount: 1 }
       },
-      { new: true, returnDocument: 'after' }
+      { new: true }
     );
-    
-    if (!post.value) {
+    if (!post) {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
-    
-    res.json({ success: true, data: post.value });
+    res.json({ success: true, data: post });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -111,32 +86,21 @@ router.delete('/:postId/like', async (req, res) => {
   try {
     const { postId } = req.params;
     const { userId } = req.body;
-    
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
-    // Convert postId to ObjectId
-    const objectId = mongoose.Types.ObjectId.isValid(postId) ? new mongoose.Types.ObjectId(postId) : postId;
-    
-    const db = mongoose.connection.db;
-    const postsCollection = db.collection('posts');
-    
-    // Remove user from likes array
-    const post = await postsCollection.findOneAndUpdate(
-      { _id: objectId },
+    const post = await Post.findByIdAndUpdate(
+      postId,
       {
-        $pull: { likes: userId },  // Remove from array
+        $pull: { likes: userId },
         $inc: { likesCount: -1 }
       },
-      { new: true, returnDocument: 'after' }
+      { new: true }
     );
-    
-    if (!post.value) {
+    if (!post) {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
-    
-    res.json({ success: true, data: post.value });
+    res.json({ success: true, data: post });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
