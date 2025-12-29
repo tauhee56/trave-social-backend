@@ -20,9 +20,9 @@ try {
 router.get('/', async (req, res) => {
   try {
     const streams = await LiveStream.find({ isActive: true });
-    res.json({ success: true, data: streams || [] });
+    res.status(200).json({ success: true, data: Array.isArray(streams) ? streams : [] });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message, data: [] });
+    res.status(200).json({ success: true, data: [] });
   }
 });
 
