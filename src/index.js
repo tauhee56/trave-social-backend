@@ -86,7 +86,7 @@ if (mongoUri) {
 console.log('🔧 Loading critical inline GET routes...');
 
 // First, add a catch-all to log ALL requests
-app.use('*', (req, res, next) => {
+app.use((req, res, next) => {
   console.log('🔴 [CATCH-ALL] Received:', req.method, req.url);
   next();
 });
