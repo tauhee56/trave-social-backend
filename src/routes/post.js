@@ -56,13 +56,12 @@ router.post('/:postId/like', async (req, res) => {
     const db = mongoose.connection.db;
     const postsCollection = db.collection('posts');
     
-    // Add user to likes array if not already there
     const result = await postsCollection.findOneAndUpdate(
       { _id: objectId },
-      {
-        $addToSet: { likes: userId },
-        $inc: { likesCount: 1 }
-      },
+      [
+        { $set: { likes: { $setUnion: ['$likes', [userId]] } } },
+        { $set: { likesCount: { $size: '$likes' } } }
+      ],
       { returnDocument: 'after' }
     );
     
@@ -92,13 +91,12 @@ router.delete('/:postId/like', async (req, res) => {
     const db = mongoose.connection.db;
     const postsCollection = db.collection('posts');
     
-    // Remove user from likes array
     const result = await postsCollection.findOneAndUpdate(
       { _id: objectId },
-      {
-        $pull: { likes: userId },
-        $inc: { likesCount: -1 }
-      },
+      [
+        { $set: { likes: { $setDifference: ['$likes', [userId]] } } },
+        { $set: { likesCount: { $size: '$likes' } } }
+      ],
       { returnDocument: 'after' }
     );
     

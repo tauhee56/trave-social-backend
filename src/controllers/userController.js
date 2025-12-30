@@ -40,10 +40,10 @@ exports.getUserProfile = async (req, res) => {
           { _id: uid }
         ]
       });
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json(user);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    res.json({ success: true, data: user });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
@@ -95,9 +95,9 @@ exports.getUserStories = async (req, res) => {
 exports.listUsers = async (req, res) => {
   try {
     const users = await User.find();
-    res.json(users);
+    res.json({ success: true, data: users });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
