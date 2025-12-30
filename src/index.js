@@ -4,6 +4,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const admin = require('firebase-admin');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 
 
 // ====== AUTO-REQUIRE ALL MODELS ======
@@ -13,6 +14,8 @@ require('../models/Category');
 require('../models/LiveStream');
 require('../models/Conversation');
 // Add more models here as needed
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -140,6 +143,95 @@ console.log('✅ Critical inline routes registered: /api/posts, /api/categories,
 
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
 app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' }));
+
+// Inline fallback auth routes to avoid 404 if router fails to load
+app.post('/api/auth/login-firebase', async (req, res) => {
+  try {
+    const { firebaseUid, email, displayName, avatar } = req.body || {};
+    if (!firebaseUid || !email) {
+      return res.status(400).json({ success: false, error: 'Firebase UID and email required' });
+    }
+
+    const User = mongoose.model('User');
+    let user = await User.findOne({ firebaseUid });
+
+    if (!user) {
+      user = new User({
+        firebaseUid,
+        email,
+        displayName: displayName || email.split('@')[0],
+        avatar: avatar || null,
+      });
+      await user.save();
+    } else {
+      user.displayName = displayName || user.displayName;
+      user.avatar = avatar || user.avatar;
+      user.updatedAt = new Date();
+      await user.save();
+    }
+
+    const token = jwt.sign({ userId: user._id, firebaseUid, email }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        firebaseUid,
+        email,
+        displayName: user.displayName,
+        avatar: user.avatar,
+      },
+    });
+  } catch (err) {
+    console.error('[Inline Auth] login-firebase error:', err.message);
+    return res.status(500).json({ success: false, error: err.message || 'Login failed' });
+  }
+});
+
+app.post('/api/auth/register-firebase', async (req, res) => {
+  try {
+    const { firebaseUid, email, displayName, avatar } = req.body || {};
+    if (!firebaseUid || !email) {
+      return res.status(400).json({ success: false, error: 'Firebase UID and email required' });
+    }
+
+    const User = mongoose.model('User');
+    let user = await User.findOne({ firebaseUid });
+
+    if (!user) {
+      user = new User({
+        firebaseUid,
+        email,
+        displayName: displayName || email.split('@')[0],
+        avatar: avatar || null,
+        followers: 0,
+        following: 0,
+      });
+      await user.save();
+    } else {
+      user.displayName = displayName || user.displayName;
+      user.avatar = avatar || user.avatar;
+      user.updatedAt = new Date();
+      await user.save();
+    }
+
+    const token = jwt.sign({ userId: user._id, firebaseUid, email }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        firebaseUid,
+        email,
+        displayName: user.displayName,
+        avatar: user.avatar,
+      },
+    });
+  } catch (err) {
+    console.error('[Inline Auth] register-firebase error:', err.message);
+    return res.status(500).json({ success: false, error: err.message || 'Registration failed' });
+  }
+});
 
 // Branding endpoint (logo, app name, etc.)
 app.get('/api/branding', (req, res) => {
