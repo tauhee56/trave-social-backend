@@ -13,7 +13,10 @@ require('../models/Post');
 require('../models/Category');
 require('../models/LiveStream');
 require('../models/Conversation');
-// Add more models here as needed
+// Try to require additional models (may not exist)
+try { require('../models/Section'); } catch (e) { console.warn('⚠️ Section model not found'); }
+try { require('../models/Story'); } catch (e) { console.warn('⚠️ Story model not found'); }
+try { require('../models/Highlight'); } catch (e) { console.warn('⚠️ Highlight model not found'); }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
@@ -143,6 +146,46 @@ console.log('✅ Critical inline routes registered: /api/posts, /api/categories,
 
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
 app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' }));
+
+// Inline fallback profile/user endpoints (before router to avoid 404)
+app.get('/api/users/:uid/posts', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const Post = mongoose.model('Post');
+    const posts = await Post.find({ userId: uid }).sort({ createdAt: -1 }).limit(50);
+    return res.json({ success: true, data: posts || [] });
+  } catch (err) {
+    console.error('[Inline] GET /api/users/:uid/posts error:', err.message);
+    return res.json({ success: true, data: [] });
+  }
+});
+
+app.get('/api/users/:uid/sections', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    return res.json({ success: true, data: [] });
+  } catch (err) {
+    return res.json({ success: true, data: [] });
+  }
+});
+
+app.get('/api/users/:uid/highlights', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    return res.json({ success: true, data: [] });
+  } catch (err) {
+    return res.json({ success: true, data: [] });
+  }
+});
+
+app.get('/api/users/:uid/stories', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    return res.json({ success: true, data: [] });
+  } catch (err) {
+    return res.json({ success: true, data: [] });
+  }
+});
 
 // Inline fallback auth routes to avoid 404 if router fails to load
 app.post('/api/auth/login-firebase', async (req, res) => {
