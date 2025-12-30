@@ -85,14 +85,20 @@ if (mongoUri) {
 // CRITICAL: Register these FIRST before any app.use() middleware
 console.log('🔧 Loading critical inline GET routes...');
 
+// First, add a catch-all to log ALL requests
+app.use('*', (req, res, next) => {
+  console.log('🔴 [CATCH-ALL] Received:', req.method, req.url);
+  next();
+});
+
 app.get('/api/posts', async (req, res) => {
-  console.log('  → GET /api/posts called');
+  console.log('🟢 [INLINE] GET /api/posts CALLED');
   try {
     const posts = await mongoose.model('Post').find().sort({ createdAt: -1 }).limit(50).catch(() => []);
-    console.log('  ✓ /api/posts returning 200 with', Array.isArray(posts) ? posts.length : 0, 'posts');
+    console.log('🟢 [INLINE] /api/posts SUCCESS - returning', Array.isArray(posts) ? posts.length : 0, 'posts');
     res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
   } catch (err) {
-    console.log('  ✓ /api/posts error, returning empty array:', err.message);
+    console.log('🟢 [INLINE] /api/posts ERROR:', err.message);
     res.status(200).json({ success: true, data: [] });
   }
 });
