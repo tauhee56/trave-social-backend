@@ -5,6 +5,15 @@ const mongoose = require('mongoose');
 const admin = require('firebase-admin');
 const path = require('path');
 
+
+// ====== AUTO-REQUIRE ALL MODELS ======
+require('../models/User');
+require('../models/Post');
+require('../models/Category');
+require('../models/LiveStream');
+require('../models/Conversation');
+// Add more models here as needed
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
