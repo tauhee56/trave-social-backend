@@ -33,7 +33,13 @@ exports.createOrUpdateUser = async (req, res) => {
 exports.getUserProfile = async (req, res) => {
   try {
     const { uid } = req.params;
-    const user = await User.findOne({ uid });
+      const user = await User.findOne({
+        $or: [
+          { uid },
+          { firebaseUid: uid },
+          { _id: uid }
+        ]
+      });
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
   } catch (err) {
@@ -101,8 +107,8 @@ exports.updateUserProfile = async (req, res) => {
     const { uid } = req.params;
     const updateData = req.body;
     
-    const user = await User.findOneAndUpdate(
-      { uid },
+      const user = await User.findOneAndUpdate(
+        { $or: [{ uid }, { firebaseUid: uid }, { _id: uid }] },
       { $set: { ...updateData, updatedAt: new Date() } },
       { new: true }
     );
