@@ -82,6 +82,47 @@ if (mongoUri) {
 }
 
 // ============= ROUTES =============
+// CRITICAL: Register these FIRST before any app.use() middleware
+console.log('🔧 Loading critical inline GET routes...');
+
+app.get('/api/posts', async (req, res) => {
+  console.log('  → GET /api/posts called');
+  try {
+    const posts = await mongoose.model('Post').find().sort({ createdAt: -1 }).limit(50).catch(() => []);
+    console.log('  ✓ /api/posts returning 200 with', Array.isArray(posts) ? posts.length : 0, 'posts');
+    res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
+  } catch (err) {
+    console.log('  ✓ /api/posts error, returning empty array:', err.message);
+    res.status(200).json({ success: true, data: [] });
+  }
+});
+
+app.get('/api/categories', async (req, res) => {
+  console.log('  → GET /api/categories called');
+  try {
+    const categories = await mongoose.model('Category').find().catch(() => []);
+    console.log('  ✓ /api/categories returning 200 with', Array.isArray(categories) ? categories.length : 0, 'categories');
+    res.status(200).json({ success: true, data: Array.isArray(categories) ? categories : [] });
+  } catch (err) {
+    console.log('  ✓ /api/categories error, returning empty array:', err.message);
+    res.status(200).json({ success: true, data: [] });
+  }
+});
+
+app.get('/api/live-streams', async (req, res) => {
+  console.log('  → GET /api/live-streams called');
+  try {
+    const streams = await mongoose.model('LiveStream').find({ isActive: true }).catch(() => []);
+    console.log('  ✓ /api/live-streams returning 200 with', Array.isArray(streams) ? streams.length : 0, 'streams');
+    res.status(200).json({ success: true, data: Array.isArray(streams) ? streams : [] });
+  } catch (err) {
+    console.log('  ✓ /api/live-streams error, returning empty array:', err.message);
+    res.status(200).json({ success: true, data: [] });
+  }
+});
+
+console.log('✅ Critical inline routes registered: /api/posts, /api/categories, /api/live-streams');
+
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
 app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' }));
 
@@ -106,15 +147,7 @@ try {
   console.warn('⚠️ Auth routes error:', err.message);
 }
 
-// Posts routes - inline, always return 200
-app.get('/api/posts', async (req, res) => {
-  try {
-    const posts = await mongoose.model('Post').find().sort({ createdAt: -1 }).limit(50).catch(() => []);
-    res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
-  } catch (err) {
-    res.status(200).json({ success: true, data: [] });
-  }
-});
+// Posts routes feed endpoint
 app.get('/api/posts/feed', async (req, res) => {
   try {
     const posts = await mongoose.model('Post').find().sort({ createdAt: -1 }).limit(50).catch(() => []);
@@ -123,7 +156,7 @@ app.get('/api/posts/feed', async (req, res) => {
     res.status(200).json({ success: true, data: [] });
   }
 });
-console.log('  ✅ /api/posts loaded');
+console.log('  ✅ /api/posts/feed loaded');
 
 try {
   app.use('/api/comments', require('./routes/comment'));
@@ -138,17 +171,6 @@ try {
 } catch (err) {
   console.warn('  ⚠️ /api/messages error:', err.message);
 }
-
-// Live-streams routes - inline, always return 200
-app.get('/api/live-streams', async (req, res) => {
-  try {
-    const streams = await mongoose.model('LiveStream').find({ isActive: true }).catch(() => []);
-    res.status(200).json({ success: true, data: Array.isArray(streams) ? streams : [] });
-  } catch (err) {
-    res.status(200).json({ success: true, data: [] });
-  }
-});
-console.log('  ✅ /api/live-streams loaded');
 
 try {
   app.use('/api/users', require('./routes/user'));
@@ -184,17 +206,6 @@ try {
 } catch (err) {
   console.warn('  ⚠️ /api/notifications error:', err.message);
 }
-
-// Categories routes - inline, always return 200
-app.get('/api/categories', async (req, res) => {
-  try {
-    const categories = await mongoose.model('Category').find().catch(() => []);
-    res.status(200).json({ success: true, data: Array.isArray(categories) ? categories : [] });
-  } catch (err) {
-    res.status(200).json({ success: true, data: [] });
-  }
-});
-console.log('  ✅ /api/categories loaded');
 
 try {
   app.use('/api/conversations', require('../routes/conversations'));
