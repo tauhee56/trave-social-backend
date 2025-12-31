@@ -125,7 +125,8 @@ console.log('✅ Critical inline routes registered: /api/posts, /api/categories,
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
 app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' }));
 
-// Inline fallback profile/user endpoints (before router to avoid 404)
+// SPECIFIC ROUTES MUST COME FIRST BEFORE GENERAL :uid ROUTE
+// GET user posts - specific route, defined before general /api/users/:uid
 app.get('/api/users/:uid/posts', async (req, res) => {
   try {
     const { uid } = req.params;
@@ -138,7 +139,37 @@ app.get('/api/users/:uid/posts', async (req, res) => {
   }
 });
 
-// GET user profile by UID - REQUIRED FOR APP
+// GET user sections - specific route, defined before general /api/users/:uid
+app.get('/api/users/:uid/sections', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    return res.json({ success: true, data: [] });
+  } catch (err) {
+    return res.json({ success: true, data: [] });
+  }
+});
+
+// GET user highlights - specific route, defined before general /api/users/:uid
+app.get('/api/users/:uid/highlights', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    return res.json({ success: true, data: [] });
+  } catch (err) {
+    return res.json({ success: true, data: [] });
+  }
+});
+
+// GET user stories - specific route, defined before general /api/users/:uid
+app.get('/api/users/:uid/stories', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    return res.json({ success: true, data: [] });
+  } catch (err) {
+    return res.json({ success: true, data: [] });
+  }
+});
+
+// GET user profile by UID - GENERAL ROUTE, MUST COME LAST (after all specific :uid/something routes)
 app.get('/api/users/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
@@ -180,45 +211,6 @@ app.get('/api/users/:uid', async (req, res) => {
   } catch (err) {
     console.error('[GET /api/users/:uid error:', err.message);
     return res.status(500).json({ success: false, error: err.message, data: null });
-  }
-});
-
-app.get('/api/users/:uid/posts', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    const Post = mongoose.model('Post');
-    const posts = await Post.find({ userId: uid }).sort({ createdAt: -1 }).limit(50);
-    return res.json({ success: true, data: posts || [] });
-  } catch (err) {
-    console.error('[Inline] GET /api/users/:uid/posts error:', err.message);
-    return res.json({ success: true, data: [] });
-  }
-});
-
-app.get('/api/users/:uid/sections', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    return res.json({ success: true, data: [] });
-  } catch (err) {
-    return res.json({ success: true, data: [] });
-  }
-});
-
-app.get('/api/users/:uid/highlights', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    return res.json({ success: true, data: [] });
-  } catch (err) {
-    return res.json({ success: true, data: [] });
-  }
-});
-
-app.get('/api/users/:uid/stories', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    return res.json({ success: true, data: [] });
-  } catch (err) {
-    return res.json({ success: true, data: [] });
   }
 });
 
