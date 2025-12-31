@@ -100,6 +100,44 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
+// POST /api/posts - Create new post
+app.post('/api/posts', async (req, res) => {
+  try {
+    const { userId, caption, mediaUrls, imageUrls, location, category, hashtags, mentions } = req.body;
+    
+    if (!userId || !caption) {
+      return res.status(400).json({ success: false, error: 'userId and caption required' });
+    }
+    
+    const Post = mongoose.model('Post');
+    
+    const newPost = new Post({
+      userId,
+      caption,
+      mediaUrls: mediaUrls || imageUrls || [],
+      likes: [],
+      comments: [],
+      location: location || null,
+      category: category || null,
+      hashtags: hashtags || [],
+      mentions: mentions || [],
+      createdAt: new Date(),
+    });
+    
+    const saved = await newPost.save();
+    
+    // Populate user data
+    const populated = await Post.findById(saved._id)
+      .populate('userId', 'displayName name avatar profilePicture photoURL');
+    
+    console.log('[POST] /api/posts - Created post:', populated._id);
+    return res.status(201).json({ success: true, data: populated, postId: populated._id });
+  } catch (err) {
+    console.error('[POST] /api/posts error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/categories', async (req, res) => {
   console.log('  → GET /api/categories called');
   try {
@@ -132,13 +170,29 @@ app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' 
 // Media upload endpoint
 app.post('/api/media/upload', async (req, res) => {
   try {
-    const { file, fileName } = req.body;
-    if (!file) {
-      return res.status(400).json({ success: false, error: 'No file provided' });
+    const { file, fileName, image, path } = req.body;
+    
+    // Support both { file, fileName } and { image, path } formats
+    const mediaFile = file || image;
+    const mediaName = fileName || path || 'media';
+    
+    if (!mediaFile) {
+      return res.status(400).json({ success: false, error: 'No file/image provided' });
     }
-    // Return mock URL for now - in production, upload to CloudinaryCloudflare/S3
-    const mockUrl = `https://via.placeholder.com/400x400?text=${fileName}`;
-    return res.json({ success: true, data: { url: mockUrl, fileName } });
+    
+    // For now, return a mock URL - in production, upload to cloud storage
+    // If image is a base64 or URI, we can use it as-is or upload to Cloudinary/S3
+    const mockUrl = `https://via.placeholder.com/400x400?text=${encodeURIComponent(mediaName)}`;
+    
+    // If image/file looks like base64 or data URI, store it and return a URL
+    const isBase64 = typeof mediaFile === 'string' && (mediaFile.includes('base64') || mediaFile.startsWith('data:'));
+    const isURI = typeof mediaFile === 'string' && mediaFile.startsWith('file://');
+    
+    // Return the image data or a mock URL
+    const url = isBase64 || isURI ? mockUrl : mediaFile;
+    
+    console.log('[POST] /api/media/upload - returning', url);
+    return res.json({ success: true, data: { url, fileName: mediaName } });
   } catch (err) {
     console.error('[POST] /api/media/upload error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
