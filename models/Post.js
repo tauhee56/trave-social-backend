@@ -3,11 +3,29 @@ const mongoose = require('mongoose');
 const PostSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   content: { type: String, required: true },
+  caption: { type: String },
   imageUrl: String,
-  likes: { type: [String], default: [] }, // Array of userIds who liked
+  mediaUrls: { type: [String], default: [] },
+  mediaType: { type: String, enum: ['image', 'video'], default: 'image' },
+  location: String,
+  locationData: {
+    name: String,
+    address: String,
+    placeId: String,
+    lat: Number,
+    lon: Number,
+    verified: Boolean
+  },
+  category: String,
+  hashtags: { type: [String], default: [] },
+  mentions: { type: [String], default: [] },
+  taggedUserIds: { type: [String], default: [] },
+  likes: { type: [String], default: [] },
   likesCount: { type: Number, default: 0 },
   comments: { type: Number, default: 0 },
+  commentsCount: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.models.Post || mongoose.model('Post', PostSchema);

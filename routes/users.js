@@ -83,14 +83,17 @@ router.put('/:userId', async (req, res) => {
   }
 });
 
-// GET /api/users/:userId/posts - Get user's posts
+// GET /api/users/:userId/posts - Get user's posts (with privacy check)
 router.get('/:userId/posts', async (req, res) => {
   try {
     const { userId } = req.params;
+    const { requesterUserId } = req.query; // Current user ID if available
     
     // Get posts collection
     const db = mongoose.connection.db;
     const postsCollection = db.collection('posts');
+    const usersCollection = db.collection('users');
+    const followsCollection = db.collection('follows');
     
     // Find posts by userId (could be MongoDB ObjectId or Firebase UID)
     const posts = await postsCollection
@@ -98,19 +101,74 @@ router.get('/:userId/posts', async (req, res) => {
       .sort({ createdAt: -1 })
       .toArray();
     
+    // Check if user is private
+    const targetUser = await usersCollection.findOne({
+      $or: [
+        { firebaseUid: userId },
+        { uid: userId },
+        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
+      ]
+    });
+    
+    // If user is private, check if requester has permission to see posts
+    if (targetUser?.isPrivate) {
+      // Allow if: requester is the user themselves, or requester follows this user
+      if (requesterUserId && requesterUserId !== userId) {
+        // Check if requester follows this user
+        const follows = await followsCollection.findOne({
+          followerId: requesterUserId,
+          followingId: userId
+        });
+        
+        if (!follows) {
+          // Requester doesn't follow and isn't the user, deny access
+          return res.json({ success: true, data: [] });
+        }
+      } else if (!requesterUserId) {
+        // No requester ID provided and user is private, deny access
+        return res.json({ success: true, data: [] });
+      }
+    }
+    
     res.json({ success: true, data: posts || [] });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message, data: [] });
   }
 });
 
-// GET /api/users/:userId/sections - Get user sections
+// GET /api/users/:userId/sections - Get user sections (with privacy check)
 router.get('/:userId/sections', async (req, res) => {
   try {
     const { userId } = req.params;
+    const { requesterUserId } = req.query;
     
     const db = mongoose.connection.db;
     const sectionsCollection = db.collection('sections');
+    const usersCollection = db.collection('users');
+    const followsCollection = db.collection('follows');
+    
+    // Check if user is private
+    const targetUser = await usersCollection.findOne({
+      $or: [
+        { firebaseUid: userId },
+        { uid: userId },
+        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
+      ]
+    });
+    
+    // If user is private, check access permission
+    if (targetUser?.isPrivate && requesterUserId && requesterUserId !== userId) {
+      const follows = await followsCollection.findOne({
+        followerId: requesterUserId,
+        followingId: userId
+      });
+      
+      if (!follows) {
+        return res.json({ success: true, data: [] });
+      }
+    } else if (targetUser?.isPrivate && !requesterUserId) {
+      return res.json({ success: true, data: [] });
+    }
     
     const sections = await sectionsCollection
       .find({ userId: userId })
@@ -123,13 +181,39 @@ router.get('/:userId/sections', async (req, res) => {
   }
 });
 
-// GET /api/users/:userId/highlights - Get user highlights
+// GET /api/users/:userId/highlights - Get user highlights (with privacy check)
 router.get('/:userId/highlights', async (req, res) => {
   try {
     const { userId } = req.params;
+    const { requesterUserId } = req.query;
     
     const db = mongoose.connection.db;
     const highlightsCollection = db.collection('highlights');
+    const usersCollection = db.collection('users');
+    const followsCollection = db.collection('follows');
+    
+    // Check if user is private
+    const targetUser = await usersCollection.findOne({
+      $or: [
+        { firebaseUid: userId },
+        { uid: userId },
+        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
+      ]
+    });
+    
+    // If user is private, check access permission
+    if (targetUser?.isPrivate && requesterUserId && requesterUserId !== userId) {
+      const follows = await followsCollection.findOne({
+        followerId: requesterUserId,
+        followingId: userId
+      });
+      
+      if (!follows) {
+        return res.json({ success: true, data: [] });
+      }
+    } else if (targetUser?.isPrivate && !requesterUserId) {
+      return res.json({ success: true, data: [] });
+    }
     
     const highlights = await highlightsCollection
       .find({ userId: userId })
@@ -142,13 +226,39 @@ router.get('/:userId/highlights', async (req, res) => {
   }
 });
 
-// GET /api/users/:userId/stories - Get user stories
+// GET /api/users/:userId/stories - Get user stories (with privacy check)
 router.get('/:userId/stories', async (req, res) => {
   try {
     const { userId } = req.params;
+    const { requesterUserId } = req.query;
     
     const db = mongoose.connection.db;
     const storiesCollection = db.collection('stories');
+    const usersCollection = db.collection('users');
+    const followsCollection = db.collection('follows');
+    
+    // Check if user is private
+    const targetUser = await usersCollection.findOne({
+      $or: [
+        { firebaseUid: userId },
+        { uid: userId },
+        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
+      ]
+    });
+    
+    // If user is private, check access permission
+    if (targetUser?.isPrivate && requesterUserId && requesterUserId !== userId) {
+      const follows = await followsCollection.findOne({
+        followerId: requesterUserId,
+        followingId: userId
+      });
+      
+      if (!follows) {
+        return res.json({ success: true, data: [] });
+      }
+    } else if (targetUser?.isPrivate && !requesterUserId) {
+      return res.json({ success: true, data: [] });
+    }
     
     const stories = await storiesCollection
       .find({ userId: userId })
