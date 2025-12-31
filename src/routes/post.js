@@ -50,26 +50,33 @@ router.post('/:postId/like', async (req, res) => {
       return res.status(400).json({ success: false, error: 'userId required', body: req.body });
     }
     
-    // Convert postId to ObjectId
-    const objectId = mongoose.Types.ObjectId.isValid(postId) ? new mongoose.Types.ObjectId(postId) : postId;
+    const Post = mongoose.model('Post');
     
-    const db = mongoose.connection.db;
-    const postsCollection = db.collection('posts');
+    // First try finding by ObjectId (real MongoDB post)
+    let result = null;
+    if (mongoose.Types.ObjectId.isValid(postId)) {
+      const objectId = new mongoose.Types.ObjectId(postId);
+      result = await Post.findByIdAndUpdate(
+        objectId,
+        { $addToSet: { likes: userId } }, // $addToSet prevents duplicates
+        { new: true }
+      );
+    }
     
-    const result = await postsCollection.findOneAndUpdate(
-      { _id: objectId },
-      [
-        { $set: { likes: { $setUnion: ['$likes', [userId]] } } },
-        { $set: { likesCount: { $size: '$likes' } } }
-      ],
-      { returnDocument: 'after' }
-    );
+    // If not found by ObjectId, try finding by string ID (generated posts)
+    if (!result) {
+      result = await Post.findOneAndUpdate(
+        { id: postId },
+        { $addToSet: { likes: userId } },
+        { new: true }
+      );
+    }
     
-    if (!result.value) {
+    if (!result) {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
     
-    res.json({ success: true, data: result.value });
+    res.json({ success: true, data: result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -85,26 +92,33 @@ router.delete('/:postId/like', async (req, res) => {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
     
-    // Convert postId to ObjectId
-    const objectId = mongoose.Types.ObjectId.isValid(postId) ? new mongoose.Types.ObjectId(postId) : postId;
+    const Post = mongoose.model('Post');
     
-    const db = mongoose.connection.db;
-    const postsCollection = db.collection('posts');
+    // First try finding by ObjectId (real MongoDB post)
+    let result = null;
+    if (mongoose.Types.ObjectId.isValid(postId)) {
+      const objectId = new mongoose.Types.ObjectId(postId);
+      result = await Post.findByIdAndUpdate(
+        objectId,
+        { $pull: { likes: userId } }, // $pull removes from array
+        { new: true }
+      );
+    }
     
-    const result = await postsCollection.findOneAndUpdate(
-      { _id: objectId },
-      [
-        { $set: { likes: { $setDifference: ['$likes', [userId]] } } },
-        { $set: { likesCount: { $size: '$likes' } } }
-      ],
-      { returnDocument: 'after' }
-    );
+    // If not found by ObjectId, try finding by string ID (generated posts)
+    if (!result) {
+      result = await Post.findOneAndUpdate(
+        { id: postId },
+        { $pull: { likes: userId } },
+        { new: true }
+      );
+    }
     
-    if (!result.value) {
+    if (!result) {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
     
-    res.json({ success: true, data: result.value });
+    res.json({ success: true, data: result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

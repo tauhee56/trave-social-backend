@@ -33,13 +33,17 @@ exports.createOrUpdateUser = async (req, res) => {
 exports.getUserProfile = async (req, res) => {
   try {
     const { uid } = req.params;
-      const user = await User.findOne({
-        $or: [
-          { uid },
-          { firebaseUid: uid },
-          { _id: uid }
-        ]
-      });
+    const mongoose = require('mongoose');
+    
+    // Build query - check firebaseUid first, then uid field, then try ObjectId if valid
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    // Only add _id if it's a valid MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    const user = await User.findOne(query);
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
     res.json({ success: true, data: user });
   } catch (err) {

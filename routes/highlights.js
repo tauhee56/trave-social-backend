@@ -2,17 +2,21 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// Highlight model (define properly in models/Highlight.js in real use)
-const Highlight = mongoose.model('Highlight', new mongoose.Schema({
-  userId: String,
-  title: String,
-  items: [Object],
-  createdAt: { type: Date, default: Date.now }
-}));
+// Use Highlight model (already loaded in server)
+const getHighlight = () => {
+  try {
+    return mongoose.model('Highlight');
+  } catch {
+    return null;
+  }
+};
 
 // Add a highlight
 router.post('/highlights', async (req, res) => {
   try {
+    const Highlight = getHighlight();
+    if (!Highlight) return res.status(500).json({ success: false, error: 'Highlight model not available' });
+    
     const { userId, title, items } = req.body;
     const highlight = new Highlight({ userId, title, items });
     await highlight.save();
@@ -25,6 +29,9 @@ router.post('/highlights', async (req, res) => {
 // Get all highlights for a user
 router.get('/users/:userId/highlights', async (req, res) => {
   try {
+    const Highlight = getHighlight();
+    if (!Highlight) return res.json({ success: true, data: [] });
+    
     const highlights = await Highlight.find({ userId: req.params.userId });
     res.json({ success: true, data: highlights });
   } catch (err) {

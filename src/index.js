@@ -100,12 +100,6 @@ if (mongoUri) {
 // CRITICAL: Register these FIRST before any app.use() middleware
 console.log('🔧 Loading critical inline GET routes...');
 
-// First, add a catch-all to log ALL requests
-app.use((req, res, next) => {
-  console.log('🔴 [CATCH-ALL] Received:', req.method, req.url);
-  next();
-});
-
 app.get('/api/posts', async (req, res) => {
   console.log('🟢 [INLINE] GET /api/posts CALLED');
   try {
@@ -289,12 +283,20 @@ app.get('/api/branding', (req, res) => {
   });
 });
 
-// Auth routes (new - proper implementation)
+// Auth routes (already handled inline above - commenting out missing route)
+// try {
+//   app.use('/api/auth', require('./routes/auth'));
+//   console.log('✅ Auth routes loaded');
+// } catch (err) {
+//   console.warn('⚠️ Auth routes error:', err.message);
+// }
+
+// Posts routes (for like/unlike endpoints)
 try {
-  app.use('/api/auth', require('./routes/auth'));
-  console.log('✅ Auth routes loaded');
+  app.use('/api/posts', require('../routes/post'));
+  console.log('  ✅ /api/posts routes (like/unlike) loaded');
 } catch (err) {
-  console.warn('⚠️ Auth routes error:', err.message);
+  console.warn('  ⚠️ /api/posts routes error:', err.message);
 }
 
 // Posts routes feed endpoint
@@ -309,49 +311,90 @@ app.get('/api/posts/feed', async (req, res) => {
 console.log('  ✅ /api/posts/feed loaded');
 
 try {
-  app.use('/api/comments', require('./routes/comment'));
+  app.use('/api/comments', require('../routes/comments'));
   console.log('  ✅ /api/comments loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/comments error:', err.message);
 }
 
 try {
-  app.use('/api/messages', require('./routes/message'));
+  app.use('/api/messages', require('../routes/messages'));
   console.log('  ✅ /api/messages loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/messages error:', err.message);
 }
 
+// User profile endpoint (before users router to avoid conflicts)
+app.get('/api/users/:uid', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const User = mongoose.model('User');
+    
+    // Build query - check firebaseUid first, then uid field, then try ObjectId if valid
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    // Only add _id if it's a valid MongoDB ObjectId (prevent auto-casting error)
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    const user = await User.findOne(query).select('_id firebaseUid email displayName avatar bio followers following').lean();
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found', data: null });
+    }
+    
+    return res.json({ 
+      success: true, 
+      data: {
+        id: user._id || uid,
+        uid: user.firebaseUid || uid,
+        email: user.email || '',
+        displayName: user.displayName || 'User',
+        avatar: user.avatar || null,
+        bio: user.bio || '',
+        followers: user.followers || 0,
+        following: user.following || 0
+      }
+    });
+  } catch (err) {
+    console.error('[Inline] GET /api/users/:uid error:', err.message);
+    return res.status(200).json({ success: false, error: err.message, data: null });
+  }
+});
+
 try {
-  app.use('/api/users', require('./routes/user'));
+  app.use('/api/users', require('../routes/users'));
   console.log('  ✅ /api/users loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/users error:', err.message);
 }
 
 try {
-  app.use('/api/highlights', require('./routes/highlight'));
+  app.use('/api/highlights', require('../routes/highlights'));
   console.log('  ✅ /api/highlights loaded');
 } catch (err) {
-  console.warn('  ⚠️ /api/highlights error:', err.message);
+  console.warn('  ⚠️ /api/highlights disabled:', err.message);
 }
 
-try {
-  app.use('/api/sections', require('./routes/section'));
-  console.log('  ✅ /api/sections loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/sections error:', err.message);
-}
+// Section routes are handled via /api/users/:uid/sections (in user routes)
+// Skipping separate /api/sections route to avoid model re-registration conflicts
+// try {
+//   app.use('/api/sections', require('../routes/sections'));
+//   console.log('  ✅ /api/sections loaded');
+// } catch (err) {
+//   console.warn('  ⚠️ /api/sections disabled:', err.message);
+// }
 
 try {
-  app.use('/api/stories', require('./routes/story'));
+  app.use('/api/stories', require('../routes/stories'));
   console.log('  ✅ /api/stories loaded');
 } catch (err) {
-  console.warn('  ⚠️ /api/stories error:', err.message);
+  console.warn('  ⚠️ /api/stories disabled:', err.message);
 }
 
 try {
-  app.use('/api/notifications', require('./routes/notification'));
+  app.use('/api/notifications', require('../routes/notification'));
   console.log('  ✅ /api/notifications loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/notifications error:', err.message);
@@ -364,11 +407,12 @@ try {
   console.warn('  ⚠️ /api/conversations error:', err.message);
 }
 
+// Branding route (disabled if not available)
 try {
-  app.use('/api/branding', require('./routes/branding'));
+  app.use('/api/branding', require('../routes/branding'));
   console.log('  ✅ /api/branding loaded');
 } catch (err) {
-  console.warn('  ⚠️ /api/branding error:', err.message);
+  console.warn('  ⚠️ /api/branding disabled:', err.message);
 }
 
 // Follow routes
@@ -412,6 +456,12 @@ try {
 }
 
 console.log('✅ Routes loading complete');
+
+// Add logging for unmatched routes (AFTER all routes defined)
+app.use((req, res, next) => {
+  console.log('📡', req.method, req.url, '- No handler found');
+  res.status(404).json({ success: false, error: 'Endpoint not found' });
+});
 
 // ============= ERROR HANDLING =============
 app.use((err, req, res, next) => {
