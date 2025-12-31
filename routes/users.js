@@ -56,7 +56,8 @@ router.get('/:userId', async (req, res) => {
           bio: '',
           followers: 0,
           following: 0,
-          posts: 0
+          posts: 0,
+          isPrivate: false
         }
       });
     }
@@ -184,6 +185,8 @@ router.patch('/:userId/privacy', async (req, res) => {
     const { userId } = req.params;
     const { isPrivate } = req.body;
     
+    console.log('[PATCH /privacy] Received:', { userId, isPrivate });
+    
     if (isPrivate === undefined) {
       return res.status(400).json({ success: false, error: 'isPrivate is required' });
     }
@@ -194,16 +197,22 @@ router.patch('/:userId/privacy', async (req, res) => {
       query.$or.push({ _id: new mongoose.Types.ObjectId(userId) });
     }
     
+    console.log('[PATCH /privacy] Query:', query);
+    
     const user = await User.findOneAndUpdate(
       query,
       { $set: { isPrivate, updatedAt: new Date() } },
       { new: true }
     );
     
+    console.log('[PATCH /privacy] Result:', { userFound: !!user, isPrivate: user?.isPrivate });
+    
     if (!user) {
+      console.error('[PATCH /privacy] User not found with query:', query);
       return res.status(404).json({ success: false, error: 'User not found' });
     }
     
+    console.log('[PATCH /privacy] ✅ Privacy updated for user:', userId);
     return res.json({ success: true, data: { isPrivate: user.isPrivate } });
   } catch (err) {
     console.error('[PATCH] /:userId/privacy error:', err.message);
