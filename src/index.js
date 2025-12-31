@@ -142,7 +142,7 @@ app.get('/api/users/:uid/posts', async (req, res) => {
 app.get('/api/users/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
-    console.log('  → GET /api/users/:uid called with uid:', uid);
+    console.log('🔍 [PROFILE] GET /api/users/:uid called with uid:', uid);
     
     const User = mongoose.model('User');
     // Try to find by firebaseUid first, then by uid directly
