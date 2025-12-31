@@ -405,7 +405,7 @@ console.log('🚀 STARTING SERVER - Type of PORT:', typeof PORT);
 
 // ============= START SERVER =============
 try {
-  const server = app.listen(parseInt(PORT) || 5000, '127.0.0.1', () => {
+  const server = app.listen(parseInt(PORT) || 5000, '0.0.0.0', () => {
     console.log(`✅ Backend running on port ${PORT}`);
     console.log(`   API: http://localhost:${PORT}/api`);
     console.log('🎉 SERVER LISTENING - READY FOR CONNECTIONS');
