@@ -233,6 +233,67 @@ app.post('/api/media/upload', async (req, res) => {
 });
 console.log('  ✅ /api/media/upload loaded');
 
+// GET /api/users/:uid - Get user profile
+app.get('/api/users/:uid', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    console.log('[GET] /api/users/:uid - Looking for user:', uid);
+    
+    const User = mongoose.model('User');
+    
+    // Build query - check firebaseUid first, then uid field, then try ObjectId if valid
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    // Only add _id if it's a valid MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    console.log('[GET] /api/users/:uid - Query:', JSON.stringify(query));
+    
+    const user = await User.findOne(query);
+    
+    if (!user) {
+      console.warn('[GET] /api/users/:uid - User not found for:', uid);
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    // Ensure user has all expected fields
+    const userData = {
+      _id: user._id,
+      uid: user.uid,
+      firebaseUid: user.firebaseUid,
+      displayName: user.displayName || user.name,
+      name: user.name || user.displayName,
+      username: user.username,
+      email: user.email,
+      avatar: user.avatar || user.photoURL,
+      photoURL: user.photoURL || user.avatar,
+      bio: user.bio,
+      website: user.website,
+      location: user.location,
+      phone: user.phone,
+      interests: user.interests,
+      followersCount: user.followersCount || (user.followers?.length || 0),
+      followingCount: user.followingCount || (user.following?.length || 0),
+      postsCount: user.postsCount || 0,
+      followers: user.followers || [],
+      following: user.following || [],
+      isPrivate: user.isPrivate || false,
+      approvedFollowers: user.approvedFollowers || [],
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
+    
+    console.log('[GET] /api/users/:uid - Returning user data');
+    return res.json({ success: true, data: userData });
+  } catch (err) {
+    console.error('[GET] /api/users/:uid error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:uid loaded');
+
 // Inline fallback auth routes to avoid 404 if router fails to load
 app.post('/api/auth/login-firebase', async (req, res) => {
   try {

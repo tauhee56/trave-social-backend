@@ -83,6 +83,10 @@ const UserSchema = new mongoose.Schema({
     enum: ['public', 'private', 'followers'],
     default: 'public',
   },
+  isPrivate: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 // Indexes for fast queries
