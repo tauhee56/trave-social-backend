@@ -87,7 +87,11 @@ console.log('🔧 Loading critical inline GET routes...');
 app.get('/api/posts', async (req, res) => {
   console.log('🟢 [INLINE] GET /api/posts CALLED');
   try {
-    const posts = await mongoose.model('Post').find().sort({ createdAt: -1 }).limit(50).catch(() => []);
+    const posts = await mongoose.model('Post').find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate('userId', 'displayName name avatar profilePicture photoURL')
+      .catch(() => []);
     console.log('🟢 [INLINE] /api/posts SUCCESS - returning', Array.isArray(posts) ? posts.length : 0, 'posts');
     res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
   } catch (err) {
@@ -125,7 +129,22 @@ console.log('✅ Critical inline routes registered: /api/posts, /api/categories,
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
 app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' }));
 
-
+// Media upload endpoint
+app.post('/api/media/upload', async (req, res) => {
+  try {
+    const { file, fileName } = req.body;
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No file provided' });
+    }
+    // Return mock URL for now - in production, upload to CloudinaryCloudflare/S3
+    const mockUrl = `https://via.placeholder.com/400x400?text=${fileName}`;
+    return res.json({ success: true, data: { url: mockUrl, fileName } });
+  } catch (err) {
+    console.error('[POST] /api/media/upload error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/media/upload loaded');
 
 // Inline fallback auth routes to avoid 404 if router fails to load
 app.post('/api/auth/login-firebase', async (req, res) => {
@@ -248,7 +267,11 @@ app.get('/api/branding', (req, res) => {
 // Posts routes feed endpoint
 app.get('/api/posts/feed', async (req, res) => {
   try {
-    const posts = await mongoose.model('Post').find().sort({ createdAt: -1 }).limit(50).catch(() => []);
+    const posts = await mongoose.model('Post').find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate('userId', 'displayName name avatar profilePicture photoURL')
+      .catch(() => []);
     res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
   } catch (err) {
     res.status(200).json({ success: true, data: [] });
@@ -402,6 +425,93 @@ try {
 }
 
 console.log('✅ Routes loading complete');
+
+// Get post comments
+app.get('/api/posts/:postId/comments', async (req, res) => {
+  try {
+    const Post = mongoose.model('Post');
+    const post = await Post.findById(req.params.postId)
+      .select('comments')
+      .populate({
+        path: 'comments.userId',
+        select: 'displayName name profilePicture avatar'
+      });
+    
+    const comments = post?.comments || [];
+    return res.json({ success: true, data: comments, hasData: comments.length > 0 });
+  } catch (err) {
+    console.error('[GET] /api/posts/:postId/comments error:', err.message);
+    return res.json({ success: true, data: [], hasData: false });
+  }
+});
+
+// Add comment to post
+app.post('/api/posts/:postId/comments', async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'Missing userId or text' });
+    }
+    
+    const Post = mongoose.model('Post');
+    const post = await Post.findById(req.params.postId);
+    if (!post) {
+      return res.status(404).json({ success: false, error: 'Post not found' });
+    }
+    
+    const comment = {
+      userId,
+      text,
+      createdAt: new Date(),
+      likes: []
+    };
+    
+    post.comments = post.comments || [];
+    post.comments.push(comment);
+    await post.save();
+    
+    return res.json({ success: true, data: comment });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Privacy toggle endpoint
+app.patch('/api/users/:uid/privacy', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { isPrivate } = req.body;
+    
+    if (isPrivate === undefined) {
+      return res.status(400).json({ success: false, error: 'isPrivate is required' });
+    }
+    
+    const User = mongoose.model('User');
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    const user = await User.findOneAndUpdate(
+      query,
+      { $set: { isPrivate, updatedAt: new Date() } },
+      { new: true }
+    );
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    return res.json({ success: true, data: { isPrivate: user.isPrivate } });
+  } catch (err) {
+    console.error('[PATCH] /api/users/:uid/privacy error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+console.log('  ✅ Comments and privacy endpoints loaded');
 
 // Add logging for unmatched routes (AFTER all routes defined)
 app.use((req, res, next) => {
