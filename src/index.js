@@ -138,6 +138,39 @@ app.post('/api/posts', async (req, res) => {
   }
 });
 
+// GET /api/posts/:postId - Get single post with populated user data
+app.get('/api/posts/:postId', async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const Post = mongoose.model('Post');
+    
+    // Try ObjectId first
+    let post = null;
+    if (mongoose.Types.ObjectId.isValid(postId)) {
+      post = await Post.findById(postId)
+        .populate('userId', 'displayName name avatar profilePicture photoURL')
+        .catch(() => null);
+    }
+    
+    // Try string ID if ObjectId didn't work
+    if (!post) {
+      post = await Post.findOne({ id: postId })
+        .populate('userId', 'displayName name avatar profilePicture photoURL')
+        .catch(() => null);
+    }
+    
+    if (!post) {
+      return res.status(404).json({ success: false, error: 'Post not found' });
+    }
+    
+    console.log('[GET] /api/posts/:postId - Found post:', postId);
+    return res.json({ success: true, data: post });
+  } catch (err) {
+    console.error('[GET] /api/posts/:postId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/categories', async (req, res) => {
   console.log('  → GET /api/categories called');
   try {
