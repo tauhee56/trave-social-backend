@@ -178,4 +178,37 @@ router.delete('/:userId/follow', async (req, res) => {
   }
 });
 
+// PATCH /api/users/:userId/privacy - Update user privacy
+router.patch('/:userId/privacy', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { isPrivate } = req.body;
+    
+    if (isPrivate === undefined) {
+      return res.status(400).json({ success: false, error: 'isPrivate is required' });
+    }
+    
+    const query = { $or: [{ firebaseUid: userId }, { uid: userId }] };
+    
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(userId) });
+    }
+    
+    const user = await User.findOneAndUpdate(
+      query,
+      { $set: { isPrivate, updatedAt: new Date() } },
+      { new: true }
+    );
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    return res.json({ success: true, data: { isPrivate: user.isPrivate } });
+  } catch (err) {
+    console.error('[PATCH] /:userId/privacy error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
