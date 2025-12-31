@@ -103,24 +103,37 @@ app.get('/api/posts', async (req, res) => {
 // POST /api/posts - Create new post
 app.post('/api/posts', async (req, res) => {
   try {
-    const { userId, caption, mediaUrls, imageUrls, location, category, hashtags, mentions } = req.body;
+    const { userId, content, caption, mediaUrls, imageUrls, location, locationData, mediaType, category, hashtags, mentions, taggedUserIds } = req.body;
     
-    if (!userId || !caption) {
-      return res.status(400).json({ success: false, error: 'userId and caption required' });
+    // Accept both 'content' and 'caption' for compatibility
+    const finalContent = content || caption;
+    
+    if (!userId || !finalContent) {
+      return res.status(400).json({ success: false, error: 'userId and caption/content required' });
     }
     
     const Post = mongoose.model('Post');
     
+    // Handle both single imageUrl and mediaUrls array
+    const images = mediaUrls && mediaUrls.length > 0 ? mediaUrls : (imageUrls ? imageUrls : []);
+    
     const newPost = new Post({
       userId,
-      caption,
-      mediaUrls: mediaUrls || imageUrls || [],
-      likes: [],
-      comments: [],
+      content: finalContent,
+      caption: finalContent,
+      imageUrl: images[0] || null,
+      mediaUrls: images || [],
       location: location || null,
+      locationData: locationData || {},
+      mediaType: mediaType || 'image',
       category: category || null,
       hashtags: hashtags || [],
       mentions: mentions || [],
+      taggedUserIds: taggedUserIds || [],
+      likes: [],
+      likesCount: 0,
+      comments: 0,
+      commentsCount: 0,
       createdAt: new Date(),
     });
     
