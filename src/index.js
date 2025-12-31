@@ -39,7 +39,14 @@ try {
 }
 
 // ============= MIDDLEWARE =============
-app.use(cors());
+// CORS with explicit options for Render + mobile
+app.use(cors({
+  origin: ['https://trave-social-backend.onrender.com', 'http://localhost:3000', 'http://localhost:5000', 'http://localhost:8081', 'http://10.0.2.2:5000', '*'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -65,31 +72,8 @@ if (mongoUri) {
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
-    .then(async () => {
+    .then(() => {
       console.log('✅ MongoDB connected');
-      
-      // Clean up conflicting indexes on startup
-      try {
-        const db = mongoose.connection.db;
-        const usersCollection = db.collection('users');
-        
-        // List all indexes
-        const indexes = await usersCollection.listIndexes().toArray();
-        
-        // Drop all indexes except _id_ to fix conflicts
-        for (const index of indexes) {
-          if (index.name !== '_id_' && (index.name === 'uid_1' || (index.key && index.key.uid))) {
-            try {
-              await usersCollection.dropIndex(index.name);
-              console.log(`✓ Dropped conflicting index: ${index.name}`);
-            } catch (err) {
-              // Index might already be dropped, continue
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('⚠️ Index cleanup warning:', err.message);
-      }
     })
     .catch(err => console.warn('⚠️ MongoDB connection warning:', err.message));
 } else {
@@ -292,12 +276,12 @@ app.get('/api/branding', (req, res) => {
 // }
 
 // Posts routes (for like/unlike endpoints)
-try {
-  app.use('/api/posts', require('../routes/post'));
-  console.log('  ✅ /api/posts routes (like/unlike) loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/posts routes error:', err.message);
-}
+// DISABLED TO DEBUG - try {
+//  app.use('/api/posts', require('../routes/post'));
+//  console.log('  ✅ /api/posts routes (like/unlike) loaded');
+// } catch (err) {
+//   console.warn('  ⚠️ /api/posts routes error:', err.message);
+// }
 
 // Posts routes feed endpoint
 app.get('/api/posts/feed', async (req, res) => {
@@ -310,19 +294,21 @@ app.get('/api/posts/feed', async (req, res) => {
 });
 console.log('  ✅ /api/posts/feed loaded');
 
-try {
-  app.use('/api/comments', require('../routes/comments'));
-  console.log('  ✅ /api/comments loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/comments error:', err.message);
-}
+// DISABLED TO DEBUG
+// try {
+//   app.use('/api/comments', require('../routes/comments'));
+//   console.log('  ✅ /api/comments loaded');
+// } catch (err) {
+//   console.warn('  ⚠️ /api/comments error:', err.message);
+// }
 
-try {
-  app.use('/api/messages', require('../routes/messages'));
-  console.log('  ✅ /api/messages loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/messages error:', err.message);
-}
+// DISABLED TO DEBUG
+// try {
+//   app.use('/api/messages', require('../routes/messages'));
+//   console.log('  ✅ /api/messages loaded');
+// } catch (err) {
+//   console.warn('  ⚠️ /api/messages error:', err.message);
+// }
 
 // User profile endpoint (before users router to avoid conflicts)
 app.get('/api/users/:uid', async (req, res) => {
@@ -363,96 +349,111 @@ app.get('/api/users/:uid', async (req, res) => {
   }
 });
 
+// Update user profile (PATCH and PUT for profile editing)
+app.put('/api/users/:uid', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { displayName, name, bio, website, location, phone, interests, avatar, photoURL, isPrivate } = req.body;
+    
+    const User = mongoose.model('User');
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    const updateData = {
+      displayName: displayName || name,
+      name: name || displayName,
+      bio: bio || null,
+      website: website || null,
+      location: location || null,
+      phone: phone || null,
+      interests: interests || [],
+      avatar: avatar || photoURL || null,
+      photoURL: photoURL || avatar || null,
+      isPrivate: isPrivate !== undefined ? isPrivate : false,
+      updatedAt: new Date(),
+    };
+    
+    const user = await User.findOneAndUpdate(query, { $set: updateData }, { new: true });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    return res.json({ success: true, data: user });
+  } catch (err) {
+    console.error('[Inline] PUT /api/users/:uid error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Same handler for PATCH
+app.patch('/api/users/:uid', async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { displayName, name, bio, website, location, phone, interests, avatar, photoURL, isPrivate } = req.body;
+    
+    const User = mongoose.model('User');
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    const updateData = {
+      displayName: displayName || name,
+      name: name || displayName,
+      bio: bio || null,
+      website: website || null,
+      location: location || null,
+      phone: phone || null,
+      interests: interests || [],
+      avatar: avatar || photoURL || null,
+      photoURL: photoURL || avatar || null,
+      isPrivate: isPrivate !== undefined ? isPrivate : false,
+      updatedAt: new Date(),
+    };
+    
+    const user = await User.findOneAndUpdate(query, { $set: updateData }, { new: true });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    return res.json({ success: true, data: user });
+  } catch (err) {
+    console.error('[Inline] PATCH /api/users/:uid error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DISABLED ALL ROUTER REQUIRES TO DEBUG
+// try {
+//   app.use('/api/users', require('../routes/users'));
+//   console.log('  ✅ /api/users loaded');
+// } catch (err) {
+//   console.warn('  ⚠️ /api/users error:', err.message);
+// }
+
+// ALL ROUTES DISABLED FOR DEBUG - MINIMAL SERVER ONLY
+// NOW RESTORING ESSENTIAL ROUTES
+
+// Posts routes (for like/unlike endpoints)
+try {
+  app.use('/api/posts', require('../routes/post'));
+  console.log('  ✅ /api/posts routes (like/unlike) loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/posts routes error:', err.message);
+}
+
+// User routes - JUST USERS ROUTER, NOT duplicate PUT/PATCH
 try {
   app.use('/api/users', require('../routes/users'));
   console.log('  ✅ /api/users loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/users error:', err.message);
-}
-
-try {
-  app.use('/api/highlights', require('../routes/highlights'));
-  console.log('  ✅ /api/highlights loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/highlights disabled:', err.message);
-}
-
-// Section routes are handled via /api/users/:uid/sections (in user routes)
-// Skipping separate /api/sections route to avoid model re-registration conflicts
-// try {
-//   app.use('/api/sections', require('../routes/sections'));
-//   console.log('  ✅ /api/sections loaded');
-// } catch (err) {
-//   console.warn('  ⚠️ /api/sections disabled:', err.message);
-// }
-
-try {
-  app.use('/api/stories', require('../routes/stories'));
-  console.log('  ✅ /api/stories loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/stories disabled:', err.message);
-}
-
-try {
-  app.use('/api/notifications', require('../routes/notification'));
-  console.log('  ✅ /api/notifications loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/notifications error:', err.message);
-}
-
-try {
-  app.use('/api/conversations', require('../routes/conversations'));
-  console.log('  ✅ /api/conversations loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/conversations error:', err.message);
-}
-
-// Branding route (disabled if not available)
-try {
-  app.use('/api/branding', require('../routes/branding'));
-  console.log('  ✅ /api/branding loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/branding disabled:', err.message);
-}
-
-// Follow routes
-try {
-  app.use('/api', require('../routes/follow'));
-  console.log('  ✅ /api/follow loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/follow error:', err.message);
-}
-
-// Passport routes
-try {
-  app.use('/api', require('../routes/passport'));
-  console.log('  ✅ /api/passport loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/passport error:', err.message);
-}
-
-// Feed routes
-try {
-  app.use('/api/feed', require('../routes/feed'));
-  console.log('  ✅ /api/feed loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/feed error:', err.message);
-}
-
-// Saved posts routes
-try {
-  app.use('/api/users', require('../routes/saved'));
-  console.log('  ✅ /api/users/saved loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/users/saved error:', err.message);
-}
-
-// Moderation routes (block/report)
-try {
-  app.use('/api', require('../routes/moderation'));
-  console.log('  ✅ /api/moderation loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/moderation error:', err.message);
 }
 
 console.log('✅ Routes loading complete');
@@ -462,6 +463,8 @@ app.use((req, res, next) => {
   console.log('📡', req.method, req.url, '- No handler found');
   res.status(404).json({ success: false, error: 'Endpoint not found' });
 });
+
+console.log('✅ 404 handler registered');
 
 // ============= ERROR HANDLING =============
 app.use((err, req, res, next) => {
@@ -473,10 +476,25 @@ app.use((err, req, res, next) => {
   });
 });
 
+console.log('✅ Error handler registered');
+console.log('🚀 STARTING SERVER - PORT:', PORT, typeof PORT);
+console.log('🚀 STARTING SERVER - Type of PORT:', typeof PORT);
+
 // ============= START SERVER =============
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Backend running on port ${PORT}`);
-  console.log(`   API: http://localhost:${PORT}/api`);
-});
+try {
+  const server = app.listen(parseInt(PORT) || 5000, '127.0.0.1', () => {
+    console.log(`✅ Backend running on port ${PORT}`);
+    console.log(`   API: http://localhost:${PORT}/api`);
+    console.log('🎉 SERVER LISTENING - READY FOR CONNECTIONS');
+  });
+  
+  server.on('error', (err) => {
+    console.error('❌ Server error:', err.message);
+  });
+} catch (err) {
+  console.error('❌ Failed to start server:', err.message);
+}
+
+console.log('✅ Server startup code executed');
 
 module.exports = app;

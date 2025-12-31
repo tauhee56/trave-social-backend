@@ -34,8 +34,9 @@ router.get('/:uid/sections', userController.getUserSections);
 // Get user stories (GET /api/users/:uid/stories)
 router.get('/:uid/stories', userController.getUserStories);
 
-// Update user profile (PUT /api/users/:uid)
+// Update user profile (PUT or PATCH /api/users/:uid)
 router.put('/:uid', userController.updateUserProfile);
+router.patch('/:uid', userController.updateUserProfile);
 
 // Get user profile (GET /api/users/:uid)
 router.get('/:uid', userController.getUserProfile);

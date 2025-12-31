@@ -51,6 +51,48 @@ exports.getUserProfile = async (req, res) => {
   }
 };
 
+// Update user profile
+exports.updateUserProfile = async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { displayName, name, bio, website, location, phone, interests, avatar, photoURL, isPrivate } = req.body;
+    
+    const mongoose = require('mongoose');
+    
+    // Build query - check firebaseUid first, then uid field, then try ObjectId if valid
+    const query = { $or: [{ firebaseUid: uid }, { uid }] };
+    
+    // Only add _id if it's a valid MongoDB ObjectId
+    if (mongoose.Types.ObjectId.isValid(uid)) {
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+    }
+    
+    const updateData = {
+      displayName: displayName || name,
+      name: name || displayName,
+      bio,
+      website,
+      location,
+      phone,
+      interests,
+      avatar: avatar || photoURL,
+      photoURL: photoURL || avatar,
+      isPrivate: isPrivate !== undefined ? isPrivate : false,
+      updatedAt: new Date(),
+    };
+    
+    const user = await User.findOneAndUpdate(query, { $set: updateData }, { new: true });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    res.json({ success: true, data: user });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 // Get user posts
 exports.getUserPosts = async (req, res) => {
   try {
@@ -100,25 +142,6 @@ exports.listUsers = async (req, res) => {
   try {
     const users = await User.find();
     res.json({ success: true, data: users });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-};
-
-// Update user profile
-exports.updateUserProfile = async (req, res) => {
-  try {
-    const { uid } = req.params;
-    const updateData = req.body;
-    
-      const user = await User.findOneAndUpdate(
-        { $or: [{ uid }, { firebaseUid: uid }, { _id: uid }] },
-      { $set: { ...updateData, updatedAt: new Date() } },
-      { new: true }
-    );
-    
-    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-    return res.json({ success: true, data: user });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
