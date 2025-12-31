@@ -585,6 +585,30 @@ try {
   console.warn('  ⚠️ /api/users error:', err.message);
 }
 
+// Conversations routes
+try {
+  app.use('/api/conversations', require('../routes/conversations'));
+  console.log('  ✅ /api/conversations loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/conversations error:', err.message);
+}
+
+// Messages routes
+try {
+  app.use('/api/messages', require('../routes/messages'));
+  console.log('  ✅ /api/messages loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/messages error:', err.message);
+}
+
+// Feed routes  
+try {
+  app.use('/api/feed', require('../routes/feed'));
+  console.log('  ✅ /api/feed loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/feed error:', err.message);
+}
+
 console.log('✅ Routes loading complete');
 
 // Get post comments
