@@ -134,35 +134,47 @@ router.post('/', async (req, res) => {
     // Accept both 'content' and 'caption' for compatibility
     const { userId, content, caption, imageUrl, mediaUrls, location, locationData, mediaType, category, hashtags, mentions, taggedUserIds } = req.body;
     
-    // Validate required fields
+    // Validate and prepare content
     const finalContent = content || caption;
+    
+    console.log('[POST /posts] Received:', { userId, content, caption, finalContent, category });
+    
     if (!userId || !finalContent) {
+      console.error('[POST /posts] Validation failed:', { userId, finalContent });
       return res.status(400).json({ success: false, error: 'userId and caption required' });
     }
     
     // Handle both single imageUrl and mediaUrls array
     const images = mediaUrls && mediaUrls.length > 0 ? mediaUrls : (imageUrl ? [imageUrl] : []);
     
-    const post = new Post({ 
+    const postData = {
       userId, 
       content: finalContent,
       caption: finalContent,
       imageUrl: images[0] || null,
-      mediaUrls: images,
-      location,
-      locationData,
+      mediaUrls: images || [],
+      location: location || '',
+      locationData: locationData || {},
       mediaType: mediaType || 'image',
-      category,
-      hashtags: hashtags || [],
-      mentions: mentions || [],
-      taggedUserIds: taggedUserIds || []
-    });
+      category: category || '',
+      hashtags: (hashtags && Array.isArray(hashtags)) ? hashtags : [],
+      mentions: (mentions && Array.isArray(mentions)) ? mentions : [],
+      taggedUserIds: (taggedUserIds && Array.isArray(taggedUserIds)) ? taggedUserIds : [],
+      likes: [],
+      likesCount: 0,
+      comments: 0,
+      commentsCount: 0
+    };
     
+    console.log('[POST /posts] Creating post with:', postData);
+    
+    const post = new Post(postData);
     await post.save();
+    
     console.log('[POST /posts] ✅ Post created:', post._id);
     res.json({ success: true, data: post });
   } catch (err) {
-    console.error('[POST /posts] Error:', err.message);
+    console.error('[POST /posts] Error:', err.message, err.stack);
     res.status(500).json({ success: false, error: err.message });
   }
 });
