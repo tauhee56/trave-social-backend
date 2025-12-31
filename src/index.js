@@ -359,45 +359,6 @@ console.log('  ✅ /api/posts/feed loaded');
 //   console.warn('  ⚠️ /api/messages error:', err.message);
 // }
 
-// User profile endpoint (before users router to avoid conflicts)
-app.get('/api/users/:uid', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    const User = mongoose.model('User');
-    
-    // Build query - check firebaseUid first, then uid field, then try ObjectId if valid
-    const query = { $or: [{ firebaseUid: uid }, { uid }] };
-    
-    // Only add _id if it's a valid MongoDB ObjectId (prevent auto-casting error)
-    if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
-    }
-    
-    const user = await User.findOne(query).select('_id firebaseUid email displayName avatar bio followers following').lean();
-    
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found', data: null });
-    }
-    
-    return res.json({ 
-      success: true, 
-      data: {
-        id: user._id || uid,
-        uid: user.firebaseUid || uid,
-        email: user.email || '',
-        displayName: user.displayName || 'User',
-        avatar: user.avatar || null,
-        bio: user.bio || '',
-        followers: user.followers || 0,
-        following: user.following || 0
-      }
-    });
-  } catch (err) {
-    console.error('[Inline] GET /api/users/:uid error:', err.message);
-    return res.status(200).json({ success: false, error: err.message, data: null });
-  }
-});
-
 // Update user profile (PATCH and PUT for profile editing)
 app.put('/api/users/:uid', async (req, res) => {
   try {
