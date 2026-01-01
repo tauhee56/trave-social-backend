@@ -329,8 +329,24 @@ app.get('/api/users/:uid', async (req, res) => {
     const user = await User.findOne(query);
     
     if (!user) {
-      console.warn('[GET] /api/users/:uid - User not found for:', uid);
-      return res.status(404).json({ success: false, error: 'User not found' });
+      console.warn('[GET] /api/users/:uid - User not found for:', uid, ' - returning placeholder');
+      // Return placeholder instead of 404
+      return res.json({ 
+        success: true, 
+        data: {
+          _id: uid,
+          uid: uid,
+          firebaseUid: uid,
+          displayName: 'User_' + uid.slice(-6),
+          email: '',
+          avatar: null,
+          bio: '',
+          isPrivate: false,
+          followersCount: 0,
+          followingCount: 0,
+          postsCount: 0
+        }
+      });
     }
     
     // Ensure user has all expected fields
