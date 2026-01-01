@@ -442,6 +442,223 @@ app.post('/api/live-streams/:streamId/leave', async (req, res) => {
 });
 console.log('  ✅ /api/live-streams/:streamId/leave (POST) loaded');
 
+// POST /api/live-streams/:streamId/comments - Add comment to live stream
+app.post('/api/live-streams/:streamId/comments', async (req, res) => {
+  try {
+    const { userId, text, userName, userAvatar } = req.body;
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'userId and text required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const liveStreamCommentsCollection = db.collection('livestream_comments');
+    
+    const newComment = {
+      streamId: req.params.streamId,
+      userId,
+      userName: userName || 'Anonymous',
+      userAvatar: userAvatar || null,
+      text,
+      createdAt: new Date(),
+      likes: [],
+      likesCount: 0,
+      reactions: {}
+    };
+    
+    const result = await liveStreamCommentsCollection.insertOne(newComment);
+    
+    console.log('[POST] /api/live-streams/:streamId/comments - Comment added:', result.insertedId);
+    return res.status(201).json({ success: true, id: result.insertedId, data: newComment });
+  } catch (err) {
+    console.error('[POST] /api/live-streams/:streamId/comments error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/comments (POST) loaded');
+
+// GET /api/live-streams/:streamId/comments - Get all comments on live stream
+app.get('/api/live-streams/:streamId/comments', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const liveStreamCommentsCollection = db.collection('livestream_comments');
+    
+    const comments = await liveStreamCommentsCollection
+      .find({ streamId: req.params.streamId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    console.log('[GET] /api/live-streams/:streamId/comments - Found:', comments.length);
+    res.json({ success: true, data: comments });
+  } catch (err) {
+    console.error('[GET] /api/live-streams/:streamId/comments error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/comments (GET) loaded');
+
+// PATCH /api/live-streams/:streamId/comments/:commentId - Edit comment
+app.patch('/api/live-streams/:streamId/comments/:commentId', async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    const { streamId, commentId } = req.params;
+    
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'userId and text required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const liveStreamCommentsCollection = db.collection('livestream_comments');
+    
+    const comment = await liveStreamCommentsCollection.findOne({ 
+      _id: toObjectId(commentId),
+      streamId: streamId
+    });
+    
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    if (comment.userId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - can only edit own comments' });
+    }
+    
+    const updated = await liveStreamCommentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { text, editedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[PATCH] /api/live-streams/:streamId/comments/:commentId - Updated:', commentId);
+    res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[PATCH] /api/live-streams/:streamId/comments/:commentId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/comments/:commentId (PATCH) loaded');
+
+// DELETE /api/live-streams/:streamId/comments/:commentId - Delete comment
+app.delete('/api/live-streams/:streamId/comments/:commentId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { streamId, commentId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const liveStreamCommentsCollection = db.collection('livestream_comments');
+    
+    const comment = await liveStreamCommentsCollection.findOne({ 
+      _id: toObjectId(commentId),
+      streamId: streamId
+    });
+    
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    if (comment.userId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - can only delete own comments' });
+    }
+    
+    await liveStreamCommentsCollection.deleteOne({ _id: toObjectId(commentId) });
+    
+    console.log('[DELETE] /api/live-streams/:streamId/comments/:commentId - Deleted:', commentId);
+    res.json({ success: true, message: 'Comment deleted' });
+  } catch (err) {
+    console.error('[DELETE] /api/live-streams/:streamId/comments/:commentId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/comments/:commentId (DELETE) loaded');
+
+// POST /api/live-streams/:streamId/comments/:commentId/like - Like comment
+app.post('/api/live-streams/:streamId/comments/:commentId/like', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { streamId, commentId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const liveStreamCommentsCollection = db.collection('livestream_comments');
+    
+    const comment = await liveStreamCommentsCollection.findOne({ 
+      _id: toObjectId(commentId)
+    });
+    
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    const likes = comment.likes || [];
+    if (likes.includes(userId)) {
+      return res.status(400).json({ success: false, error: 'Already liked' });
+    }
+    
+    likes.push(userId);
+    const updated = await liveStreamCommentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { likes, likesCount: likes.length } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/live-streams/:streamId/comments/:commentId/like - User', userId, 'liked');
+    res.json({ success: true, data: { likes: updated.value.likes, likesCount: updated.value.likesCount } });
+  } catch (err) {
+    console.error('[POST] /api/live-streams/:streamId/comments/:commentId/like error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/comments/:commentId/like (POST) loaded');
+
+// POST /api/live-streams/:streamId/comments/:commentId/reactions - React to comment
+app.post('/api/live-streams/:streamId/comments/:commentId/reactions', async (req, res) => {
+  try {
+    const { userId, reaction } = req.body;
+    const { streamId, commentId } = req.params;
+    
+    if (!userId || !reaction) {
+      return res.status(400).json({ success: false, error: 'userId and reaction required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const liveStreamCommentsCollection = db.collection('livestream_comments');
+    
+    const comment = await liveStreamCommentsCollection.findOne({ 
+      _id: toObjectId(commentId)
+    });
+    
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    const reactions = comment.reactions || {};
+    reactions[reaction] = reactions[reaction] || [];
+    
+    if (!reactions[reaction].includes(userId)) {
+      reactions[reaction].push(userId);
+    }
+    
+    const updated = await liveStreamCommentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { reactions } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/live-streams/:streamId/comments/:commentId/reactions - User', userId, 'reacted:', reaction);
+    res.json({ success: true, data: { reactions: updated.value.reactions } });
+  } catch (err) {
+    console.error('[POST] /api/live-streams/:streamId/comments/:commentId/reactions error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/comments/:commentId/reactions (POST) loaded');
+
 console.log('✅ Critical inline routes registered: /api/posts, /api/categories, /api/live-streams');
 
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
