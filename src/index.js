@@ -29,6 +29,12 @@ try { require('../models/Highlight'); } catch (e) { console.warn('⚠️ Highlig
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
+// Helper function to convert string to ObjectId
+const toObjectId = (id) => {
+  if (typeof id === 'object' && id._bsontype === 'ObjectId') return id;
+  return new toObjectId(id);
+};
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -344,7 +350,7 @@ app.get('/api/users/:uid', async (req, res) => {
     
     // Only add _id if it's a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
     }
     
     console.log('[GET] /api/users/:uid - Query:', JSON.stringify(query));
@@ -419,7 +425,7 @@ app.get('/api/users/:userId/posts', async (req, res) => {
     
     // Get user to check privacy
     const usersCollection = db.collection('users');
-    const targetUser = await usersCollection.findOne({ _id: ObjectId(userId) });
+    const targetUser = await usersCollection.findOne({ _id: totoObjectId(userId) });
     
     // Check if user is private
     if (targetUser?.isPrivate) {
@@ -433,8 +439,8 @@ app.get('/api/users/:userId/posts', async (req, res) => {
         // Check if requester is follower
         const followsCollection = db.collection('follows');
         const isFollower = await followsCollection.findOne({
-          followerId: ObjectId(requesterUserId),
-          followingId: ObjectId(userId)
+          followerId: toObjectId(requesterUserId),
+          followingId: toObjectId(userId)
         });
         
         if (!isFollower) {
@@ -573,7 +579,7 @@ app.put('/api/users/:userId/sections/:sectionId', async (req, res) => {
     if (coverImage) updateData.coverImage = coverImage;
 
     const result = await sectionsCollection.findOneAndUpdate(
-      { _id: ObjectId(sectionId), userId },
+      { _id: toObjectId(sectionId), userId },
       { $set: updateData },
       { returnDocument: 'after' }
     );
@@ -600,7 +606,7 @@ app.delete('/api/users/:userId/sections/:sectionId', async (req, res) => {
     const sectionsCollection = db.collection('sections');
 
     const result = await sectionsCollection.deleteOne({
-      _id: ObjectId(sectionId),
+      _id: toObjectId(sectionId),
       userId
     });
 
@@ -798,7 +804,7 @@ app.put('/api/users/:uid', async (req, res) => {
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
     
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
     }
     
     const updateData = {
@@ -838,7 +844,7 @@ app.patch('/api/users/:uid', async (req, res) => {
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
     
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
     }
     
     const updateData = {
@@ -1053,7 +1059,7 @@ app.patch('/api/users/:uid/privacy', async (req, res) => {
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
     
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
     }
     
     const user = await User.findOneAndUpdate(
@@ -1088,8 +1094,8 @@ app.post('/api/users/:userId/block/:blockUserId', async (req, res) => {
     
     // Check if already blocked
     const existing = await blocksCollection.findOne({
-      blockerId: ObjectId(userId),
-      blockedId: ObjectId(blockUserId)
+      blockerId: toObjectId(userId),
+      blockedId: toObjectId(blockUserId)
     });
     
     if (existing) {
@@ -1098,8 +1104,8 @@ app.post('/api/users/:userId/block/:blockUserId', async (req, res) => {
     
     // Add block
     const result = await blocksCollection.insertOne({
-      blockerId: ObjectId(userId),
-      blockedId: ObjectId(blockUserId),
+      blockerId: toObjectId(userId),
+      blockedId: toObjectId(blockUserId),
       createdAt: new Date()
     });
     
@@ -1121,8 +1127,8 @@ app.delete('/api/users/:userId/block/:blockUserId', async (req, res) => {
     const blocksCollection = db.collection('blocks');
     
     const result = await blocksCollection.deleteOne({
-      blockerId: ObjectId(userId),
-      blockedId: ObjectId(blockUserId)
+      blockerId: toObjectId(userId),
+      blockedId: toObjectId(blockUserId)
     });
     
     if (result.deletedCount === 0) {
@@ -1153,8 +1159,8 @@ app.post('/api/posts/:postId/report', async (req, res) => {
     
     // Check if already reported by this user
     const existing = await reportsCollection.findOne({
-      reporterId: ObjectId(userId),
-      postId: ObjectId(postId)
+      reporterId: toObjectId(userId),
+      postId: toObjectId(postId)
     });
     
     if (existing) {
@@ -1162,8 +1168,8 @@ app.post('/api/posts/:postId/report', async (req, res) => {
     }
     
     const result = await reportsCollection.insertOne({
-      postId: ObjectId(postId),
-      reporterId: ObjectId(userId),
+      postId: toObjectId(postId),
+      reporterId: toObjectId(userId),
       reason,
       details: details || '',
       status: 'pending',
@@ -1198,8 +1204,8 @@ app.post('/api/users/:userId/report', async (req, res) => {
     
     // Check if already reported
     const existing = await userReportsCollection.findOne({
-      reporterId: ObjectId(reporterId),
-      userId: ObjectId(userId)
+      reporterId: toObjectId(reporterId),
+      userId: toObjectId(userId)
     });
     
     if (existing) {
@@ -1207,8 +1213,8 @@ app.post('/api/users/:userId/report', async (req, res) => {
     }
     
     const result = await userReportsCollection.insertOne({
-      userId: ObjectId(userId),
-      reporterId: ObjectId(reporterId),
+      userId: toObjectId(userId),
+      reporterId: toObjectId(reporterId),
       reason,
       details: details || '',
       status: 'pending',
@@ -1247,22 +1253,33 @@ app.get('/api/notifications/:userId', async (req, res) => {
     const { userId } = req.params;
     const { limit = 50, skip = 0 } = req.query;
     
+    console.log('[GET] /api/notifications/:userId - userId:', userId);
+    
+    // Validate ObjectId
+    if (!ObjectId.isValid(userId)) {
+      console.log('[GET] /api/notifications/:userId - Invalid userId format');
+      return res.json({ success: true, data: [], total: 0, message: 'Invalid userId' });
+    }
+    
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
     
+    const objId = new toObjectId(userId);
+    console.log('[GET] /api/notifications/:userId - Query with:', { recipientId: objId });
+    
     const notifications = await notificationsCollection
-      .find({ recipientId: ObjectId(userId) })
+      .find({ recipientId: objId })
       .sort({ createdAt: -1 })
-      .skip(parseInt(skip))
-      .limit(parseInt(limit))
+      .skip(parseInt(skip) || 0)
+      .limit(parseInt(limit) || 50)
       .toArray();
     
-    const total = await notificationsCollection.countDocuments({ recipientId: ObjectId(userId) });
+    const total = await notificationsCollection.countDocuments({ recipientId: objId });
     
     console.log('[GET] /api/notifications/:userId - Returned', notifications?.length || 0, 'of', total);
     res.json({ success: true, data: notifications || [], total });
   } catch (err) {
-    console.error('[GET] /api/notifications/:userId error:', err.message);
+    console.error('[GET] /api/notifications/:userId error:', err.message, err.stack);
     res.status(500).json({ success: false, error: err.message, data: [] });
   }
 });
@@ -1286,10 +1303,10 @@ app.post('/api/notifications', async (req, res) => {
     const notificationsCollection = db.collection('notifications');
     
     const notification = {
-      recipientId: ObjectId(recipientId),
-      senderId: ObjectId(senderId),
+      recipientId: toObjectId(recipientId),
+      senderId: toObjectId(senderId),
       type, // 'like', 'comment', 'follow', 'mention'
-      postId: postId ? ObjectId(postId) : null,
+      postId: postId ? toObjectId(postId) : null,
       message: message || `${type} notification`,
       read: false,
       createdAt: new Date()
@@ -1316,7 +1333,7 @@ app.patch('/api/notifications/:notificationId/read', async (req, res) => {
     const notificationsCollection = db.collection('notifications');
     
     const result = await notificationsCollection.findOneAndUpdate(
-      { _id: ObjectId(notificationId) },
+      { _id: toObjectId(notificationId) },
       { $set: { read: true, readAt: new Date() } },
       { returnDocument: 'after' }
     );
