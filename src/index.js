@@ -2,7 +2,6 @@
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const { ObjectId } = require('mongodb');
 const admin = require('firebase-admin');
 const path = require('path');
 const jwt = require('jsonwebtoken');
@@ -29,10 +28,15 @@ try { require('../models/Highlight'); } catch (e) { console.warn('⚠️ Highlig
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-// Helper function to convert string to ObjectId
+// Helper function to convert string to ObjectId (using mongoose.Types.ObjectId to avoid BSON version conflicts)
 const toObjectId = (id) => {
-  if (typeof id === 'object' && id._bsontype === 'ObjectId') return id;
-  return new ObjectId(id);
+  if (typeof id === 'object' && (id instanceof mongoose.Types.ObjectId || id._bsontype === 'ObjectId')) return id;
+  try {
+    return new mongoose.Types.ObjectId(id);
+  } catch (err) {
+    console.error('Invalid ObjectId:', id, err.message);
+    return null;
+  }
 };
 
 const app = express();
@@ -1256,7 +1260,7 @@ app.get('/api/notifications/:userId', async (req, res) => {
     console.log('[GET] /api/notifications/:userId - userId:', userId);
     
     // Validate ObjectId
-    if (!ObjectId.isValid(userId)) {
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
       console.log('[GET] /api/notifications/:userId - Invalid userId format');
       return res.json({ success: true, data: [], total: 0, message: 'Invalid userId' });
     }
