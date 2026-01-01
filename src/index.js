@@ -32,7 +32,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 // Helper function to convert string to ObjectId
 const toObjectId = (id) => {
   if (typeof id === 'object' && id._bsontype === 'ObjectId') return id;
-  return new toObjectId(id);
+  return new ObjectId(id);
 };
 
 const app = express();
