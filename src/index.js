@@ -1001,54 +1001,219 @@ console.log('✅ Routes loading complete');
 // Get post comments
 app.get('/api/posts/:postId/comments', async (req, res) => {
   try {
-    const Post = mongoose.model('Post');
-    const post = await Post.findById(req.params.postId)
-      .select('comments')
-      .populate({
-        path: 'comments.userId',
-        select: 'displayName name profilePicture avatar'
-      });
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
     
-    const comments = post?.comments || [];
-    return res.json({ success: true, data: comments, hasData: comments.length > 0 });
+    const comments = await commentsCollection
+      .find({ postId: req.params.postId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    res.json({ success: true, data: comments });
   } catch (err) {
     console.error('[GET] /api/posts/:postId/comments error:', err.message);
-    return res.json({ success: true, data: [], hasData: false });
+    return res.status(500).json({ success: false, error: err.message, data: [] });
   }
 });
 
 // Add comment to post
 app.post('/api/posts/:postId/comments', async (req, res) => {
   try {
-    const { userId, text } = req.body;
+    const { userId, text, userName, userAvatar } = req.body;
     if (!userId || !text) {
       return res.status(400).json({ success: false, error: 'Missing userId or text' });
     }
     
-    const Post = mongoose.model('Post');
-    const post = await Post.findById(req.params.postId);
-    if (!post) {
-      return res.status(404).json({ success: false, error: 'Post not found' });
-    }
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
     
-    const comment = {
+    const newComment = {
+      postId: req.params.postId,
       userId,
+      userName: userName || 'Anonymous',
+      userAvatar: userAvatar || null,
       text,
       createdAt: new Date(),
-      likes: []
+      likes: [],
+      likesCount: 0,
+      reactions: {},
+      replies: []
     };
     
-    post.comments = post.comments || [];
-    post.comments.push(comment);
-    await post.save();
+    const result = await commentsCollection.insertOne(newComment);
     
-    return res.json({ success: true, data: comment });
+    console.log('[POST] /api/posts/:postId/comments - Created comment:', result.insertedId);
+    return res.status(201).json({ success: true, id: result.insertedId, data: newComment });
   } catch (err) {
     console.error('[POST] /api/posts/:postId/comments error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 console.log('  ✅ /api/posts/:postId/comments (POST) loaded');
+
+// PATCH /api/posts/:postId/comments/:commentId - Edit comment
+app.patch('/api/posts/:postId/comments/:commentId', async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    const { postId, commentId } = req.params;
+    
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'Missing userId or text' });
+    }
+    
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    
+    // Check if comment exists and belongs to user
+    const comment = await commentsCollection.findOne({ 
+      _id: toObjectId(commentId),
+      postId: postId
+    });
+    
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    if (comment.userId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only edit your own comments' });
+    }
+    
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { 
+        $set: { 
+          text, 
+          editedAt: new Date()
+        }
+      },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[PATCH] /api/posts/:postId/comments/:commentId - Updated:', commentId);
+    res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[PATCH] /api/posts/:postId/comments/:commentId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId (PATCH) loaded');
+
+// DELETE /api/posts/:postId/comments/:commentId - Delete comment
+app.delete('/api/posts/:postId/comments/:commentId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { postId, commentId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    
+    // Check if comment exists and belongs to user
+    const comment = await commentsCollection.findOne({ 
+      _id: toObjectId(commentId),
+      postId: postId
+    });
+    
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    if (comment.userId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own comments' });
+    }
+    
+    await commentsCollection.deleteOne({ _id: toObjectId(commentId) });
+    
+    console.log('[DELETE] /api/posts/:postId/comments/:commentId - Deleted:', commentId);
+    res.json({ success: true, message: 'Comment deleted' });
+  } catch (err) {
+    console.error('[DELETE] /api/posts/:postId/comments/:commentId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId (DELETE) loaded');
+
+// POST /api/posts/:postId/comments/:commentId/like - Like a comment
+app.post('/api/posts/:postId/comments/:commentId/like', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { postId, commentId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    
+    const comment = await commentsCollection.findOne({ _id: toObjectId(commentId) });
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    const likes = comment.likes || [];
+    if (likes.includes(userId)) {
+      return res.status(400).json({ success: false, error: 'Already liked' });
+    }
+    
+    likes.push(userId);
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { likes, likesCount: likes.length } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/posts/:postId/comments/:commentId/like - User', userId, 'liked comment');
+    res.json({ success: true, data: { likes: updated.value.likes, likesCount: updated.value.likesCount } });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments/:commentId/like error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/like (POST) loaded');
+
+// POST /api/posts/:postId/comments/:commentId/reactions - Add reaction to comment
+app.post('/api/posts/:postId/comments/:commentId/reactions', async (req, res) => {
+  try {
+    const { userId, reaction } = req.body;
+    const { postId, commentId } = req.params;
+    
+    if (!userId || !reaction) {
+      return res.status(400).json({ success: false, error: 'userId and reaction required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    
+    const comment = await commentsCollection.findOne({ _id: toObjectId(commentId) });
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+    
+    const reactions = comment.reactions || {};
+    reactions[reaction] = reactions[reaction] || [];
+    
+    if (!reactions[reaction].includes(userId)) {
+      reactions[reaction].push(userId);
+    }
+    
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { reactions } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/posts/:postId/comments/:commentId/reactions - User', userId, 'reacted:', reaction);
+    res.json({ success: true, data: { reactions: updated.value.reactions } });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments/:commentId/reactions error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/reactions (POST) loaded');
 
 // POST /api/posts/:postId/like - Like a post
 app.post('/api/posts/:postId/like', async (req, res) => {
