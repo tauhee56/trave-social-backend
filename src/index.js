@@ -1048,6 +1048,79 @@ app.post('/api/posts/:postId/comments', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+console.log('  ✅ /api/posts/:postId/comments (POST) loaded');
+
+// POST /api/posts/:postId/like - Like a post
+app.post('/api/posts/:postId/like', async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+    
+    const Post = mongoose.model('Post');
+    const post = await Post.findById(postId);
+    
+    if (!post) {
+      return res.status(404).json({ success: false, error: 'Post not found' });
+    }
+    
+    if (!post.likes) post.likes = [];
+    
+    // Check if already liked
+    if (post.likes.includes(userId)) {
+      return res.status(400).json({ success: false, error: 'Already liked' });
+    }
+    
+    post.likes.push(userId);
+    await post.save();
+    
+    console.log('[POST] /api/posts/:postId/like - User', userId, 'liked post', postId);
+    return res.json({ success: true, data: { likes: post.likes, total: post.likes.length } });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/like error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/like (POST) loaded');
+
+// DELETE /api/posts/:postId/like - Unlike a post
+app.delete('/api/posts/:postId/like', async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+    
+    const Post = mongoose.model('Post');
+    const post = await Post.findById(postId);
+    
+    if (!post) {
+      return res.status(404).json({ success: false, error: 'Post not found' });
+    }
+    
+    if (!post.likes) post.likes = [];
+    
+    // Check if liked
+    if (!post.likes.includes(userId)) {
+      return res.status(400).json({ success: false, error: 'Not liked' });
+    }
+    
+    post.likes = post.likes.filter(id => id !== userId);
+    await post.save();
+    
+    console.log('[DELETE] /api/posts/:postId/like - User', userId, 'unliked post', postId);
+    return res.json({ success: true, data: { likes: post.likes, total: post.likes.length } });
+  } catch (err) {
+    console.error('[DELETE] /api/posts/:postId/like error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/like (DELETE) loaded');
 
 // Privacy toggle endpoint
 app.patch('/api/users/:uid/privacy', async (req, res) => {
