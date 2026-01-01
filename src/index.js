@@ -656,12 +656,13 @@ try {
 }
 
 // User routes - JUST USERS ROUTER, NOT duplicate PUT/PATCH
-try {
-  app.use('/api/users', require('../routes/users'));
-  console.log('  ✅ /api/users loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/users error:', err.message);
-}
+// DISABLED: Using inline routes instead for better control
+// try {
+//   app.use('/api/users', require('../routes/users'));
+//   console.log('  ✅ /api/users loaded');
+// } catch (err) {
+//   console.warn('  ⚠️ /api/users error:', err.message);
+// }
 
 // Conversations routes
 try {
