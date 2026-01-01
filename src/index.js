@@ -5,7 +5,15 @@ const mongoose = require('mongoose');
 const admin = require('firebase-admin');
 const path = require('path');
 const jwt = require('jsonwebtoken');
+const cloudinary = require('cloudinary').v2;
 
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+console.log('✅ Cloudinary configured');
 
 // ====== AUTO-REQUIRE ALL MODELS ======
 require('../models/User');
