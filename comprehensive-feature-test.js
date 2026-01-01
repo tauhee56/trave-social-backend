@@ -10,6 +10,18 @@ async function runComprehensiveTest() {
   console.log('='.repeat(70));
   console.log('Testing: Comments, Likes, Stories, Posts, Feed\n');
   
+  // First, get a real post ID to use for comment/like tests
+  let realPostId = TEST_POST_ID;
+  try {
+    const postsRes = await axios.get(`${BACKEND_URL}/api/posts`, { timeout: 5000 });
+    if (postsRes.data?.data && postsRes.data.data.length > 0) {
+      realPostId = postsRes.data.data[0]._id || postsRes.data.data[0].id || TEST_POST_ID;
+      console.log(`📌 Using post ID: ${realPostId}\n`);
+    }
+  } catch (e) {
+    console.log(`⚠️ Using default post ID: ${realPostId}\n`);
+  }
+  
   const tests = [
     // ===== POSTS =====
     {
@@ -31,22 +43,22 @@ async function runComprehensiveTest() {
       }
     },
     
-    // ===== COMMENTS =====
     {
       category: '💬 COMMENTS',
       name: 'Get post comments',
       method: 'GET',
-      url: `/api/posts/${TEST_POST_ID}/comments`,
+      url: `/api/comments/posts/${realPostId}/comments`,
     },
     {
       category: '💬 COMMENTS',
       name: 'Add comment to post',
       method: 'POST',
-      url: `/api/posts/${TEST_POST_ID}/comments`,
+      url: `/api/comments/posts/${realPostId}/comments`,
       data: {
         userId: TEST_USER_ID,
-        text: 'Great post!',
-        userName: 'TestUser'
+        userName: 'TestUser',
+        userAvatar: null,
+        text: 'Great post!'
       }
     },
     
@@ -55,7 +67,7 @@ async function runComprehensiveTest() {
       category: '❤️ LIKES',
       name: 'Like post',
       method: 'POST',
-      url: `/api/posts/${TEST_POST_ID}/like`,
+      url: `/api/posts/${realPostId}/like`,
       data: {
         userId: TEST_USER_ID
       }
@@ -64,7 +76,7 @@ async function runComprehensiveTest() {
       category: '❤️ LIKES',
       name: 'Unlike post',
       method: 'DELETE',
-      url: `/api/posts/${TEST_POST_ID}/like`,
+      url: `/api/posts/${realPostId}/like`,
       data: {
         userId: TEST_USER_ID
       }
