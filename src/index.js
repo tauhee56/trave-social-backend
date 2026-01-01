@@ -674,7 +674,7 @@ app.post('/api/media/upload', async (req, res) => {
     const mediaName = fileName || path || 'media';
     
     console.log('[POST] /api/media/upload - Received request');
-    console.log('[POST] /api/media/upload - mediaFile length:', mediaFile?.length);
+    console.log('[POST] /api/media/upload - mediaFile exists:', !!mediaFile);
     console.log('[POST] /api/media/upload - mediaName:', mediaName);
     
     if (!mediaFile) {
@@ -691,7 +691,15 @@ app.post('/api/media/upload', async (req, res) => {
     });
 
     console.log('[POST] /api/media/upload - ✅ Cloudinary upload successful:', result.secure_url);
-    return res.json({ success: true, data: { url: result.secure_url, fileName: mediaName } });
+    return res.json({ 
+      success: true, 
+      data: { 
+        url: result.secure_url, 
+        fileName: mediaName,
+        secureUrl: result.secure_url
+      },
+      url: result.secure_url
+    });
   } catch (err) {
     console.error('[POST] /api/media/upload - ❌ Error:', err.message);
     console.error('[POST] /api/media/upload - Stack:', err.stack);
@@ -702,11 +710,27 @@ console.log('  ✅ /api/media/upload loaded (with Cloudinary)');
 
 // ============= INLINE ROUTES FOR MISSING ENDPOINTS =============
 
-// GET /api/conversations - Get conversations (placeholder)
+// GET /api/conversations - Get conversations for current user
 app.get('/api/conversations', async (req, res) => {
   try {
+    const userId = req.query.userId || req.headers['x-user-id'];
     const db = mongoose.connection.db;
-    const conversations = await db.collection('conversations').find({}).limit(20).toArray();
+    
+    // If userId provided, filter conversations for that user
+    const query = userId ? { 
+      $or: [
+        { userId1: userId }, 
+        { userId2: userId },
+        { participants: userId }
+      ]
+    } : {};
+    
+    const conversations = await db.collection('conversations')
+      .find(query)
+      .sort({ updatedAt: -1 })
+      .limit(50)
+      .toArray();
+    
     res.json({ success: true, data: conversations || [] });
   } catch (err) {
     res.json({ success: true, data: [] });
@@ -1652,8 +1676,17 @@ app.get('/api/posts/:postId/comments', async (req, res) => {
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
     
+    // Convert postId to string for comparison (MongoDB stores IDs as strings in some cases)
+    const postIdStr = req.params.postId;
+    const postIdObj = toObjectId(postIdStr);
+    
     const comments = await commentsCollection
-      .find({ postId: req.params.postId })
+      .find({ 
+        $or: [
+          { postId: postIdStr },
+          { postId: postIdObj }
+        ]
+      })
       .sort({ createdAt: -1 })
       .toArray();
     
@@ -1676,12 +1709,13 @@ app.post('/api/posts/:postId/comments', async (req, res) => {
     const commentsCollection = db.collection('comments');
     
     const newComment = {
-      postId: req.params.postId,
+      postId: req.params.postId,  // Store as string, DB will handle it
       userId,
       userName: userName || 'Anonymous',
       userAvatar: userAvatar || null,
       text,
       createdAt: new Date(),
+      updatedAt: new Date(),
       likes: [],
       likesCount: 0,
       reactions: {},
@@ -1691,7 +1725,11 @@ app.post('/api/posts/:postId/comments', async (req, res) => {
     const result = await commentsCollection.insertOne(newComment);
     
     console.log('[POST] /api/posts/:postId/comments - Created comment:', result.insertedId);
-    return res.status(201).json({ success: true, id: result.insertedId, data: newComment });
+    return res.status(201).json({ 
+      success: true, 
+      id: result.insertedId, 
+      data: { ...newComment, _id: result.insertedId } 
+    });
   } catch (err) {
     console.error('[POST] /api/posts/:postId/comments error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
