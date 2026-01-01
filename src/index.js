@@ -425,7 +425,7 @@ app.get('/api/users/:userId/posts', async (req, res) => {
     
     // Get user to check privacy
     const usersCollection = db.collection('users');
-    const targetUser = await usersCollection.findOne({ _id: totoObjectId(userId) });
+    const targetUser = await usersCollection.findOne({ _id: toObjectId(userId) });
     
     // Check if user is private
     if (targetUser?.isPrivate) {
