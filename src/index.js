@@ -1264,7 +1264,7 @@ app.get('/api/notifications/:userId', async (req, res) => {
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
     
-    const objId = new toObjectId(userId);
+    const objId = toObjectId(userId);
     console.log('[GET] /api/notifications/:userId - Query with:', { recipientId: objId });
     
     const notifications = await notificationsCollection
