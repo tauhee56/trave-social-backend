@@ -13,6 +13,7 @@ async function runMessagingTest() {
   let conversationId = null;
   let messageId = null;
   let replyId = null;
+  let messageId2 = null; // For authorization test
   
   const tests = [
     {
@@ -39,7 +40,7 @@ async function runMessagingTest() {
       data: { senderId: USER_2, text: 'Im doing great! How about you?' },
       check: (res) => res.status === 201 || res.status === 200,
       requiresConvId: true,
-      onSuccess: (res) => { replyId = res.data?.id; }
+      onSuccess: (res) => { messageId2 = res.data?.id; replyId = res.data?.id; }
     },
     {
       name: '4️⃣ Get all messages in conversation',
@@ -82,8 +83,7 @@ async function runMessagingTest() {
       data: { senderId: USER_1, text: 'I was actually about to ask you that!' },
       check: (res) => res.status === 201 || res.status === 200,
       requiresConvId: true,
-      requiresMessageId: true,
-      onSuccess: (res) => { replyId = res.data?.id; }
+      requiresMessageId: true
     },
     {
       name: '9️⃣ Get message with reactions and replies',
@@ -94,23 +94,23 @@ async function runMessagingTest() {
       requiresMessageId: true
     },
     {
-      name: '🔟 Delete own message',
+      name: '🔟 Try delete someone elses message (should fail)',
+      method: 'DELETE',
+      url: '/api/conversations/{conversationId}/messages/{messageId2}',
+      data: { userId: USER_1 },
+      check: (res) => res.status === 403 || res.status === 400,
+      requiresConvId: true,
+      requiresMessageId2: true,
+      expectFailure: true
+    },
+    {
+      name: '1️⃣1️⃣ Delete own message',
       method: 'DELETE',
       url: '/api/conversations/{conversationId}/messages/{messageId}',
       data: { userId: USER_1 },
       check: (res) => res.status === 200,
       requiresConvId: true,
       requiresMessageId: true
-    },
-    {
-      name: '1️⃣1️⃣ Try delete someone elses message (should fail)',
-      method: 'DELETE',
-      url: '/api/conversations/{conversationId}/messages/{replyId}',
-      data: { userId: USER_1 },
-      check: (res) => res.status === 403 || res.status === 400,
-      requiresConvId: true,
-      requiresReplyId: true,
-      expectFailure: true
     }
   ];
   
@@ -128,6 +128,11 @@ async function runMessagingTest() {
       continue;
     }
     
+    if (test.requiresMessageId2 && !messageId2) {
+      console.log(`⏭️  ${test.name} - SKIPPED (no second message ID)`);
+      continue;
+    }
+    
     if (test.requiresReplyId && !replyId) {
       console.log(`⏭️  ${test.name} - SKIPPED (no reply ID)`);
       continue;
@@ -137,6 +142,7 @@ async function runMessagingTest() {
       let url = test.url;
       if (test.requiresConvId) url = url.replace('{conversationId}', conversationId);
       if (test.requiresMessageId) url = url.replace('{messageId}', messageId);
+      if (test.requiresMessageId2) url = url.replace('{messageId2}', messageId2);
       if (test.requiresReplyId) url = url.replace('{replyId}', replyId);
       
       const fullUrl = `${BACKEND_URL}${url}`;
