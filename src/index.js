@@ -305,6 +305,233 @@ app.get('/api/messages', async (req, res) => {
 });
 console.log('  ✅ /api/messages loaded');
 
+// POST /api/conversations/:conversationId/messages - Send message
+app.post('/api/conversations/:conversationId/messages', async (req, res) => {
+  try {
+    const { senderId, text } = req.body;
+    if (!senderId || !text) {
+      return res.status(400).json({ success: false, error: 'senderId and text required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const newMessage = {
+      conversationId: req.params.conversationId,
+      senderId,
+      text,
+      createdAt: new Date(),
+      reactions: {},
+      replies: []
+    };
+    
+    const result = await messagesCollection.insertOne(newMessage);
+    
+    console.log('[POST] /api/conversations/:conversationId/messages - Created:', result.insertedId);
+    return res.status(201).json({ success: true, id: result.insertedId, data: newMessage });
+  } catch (err) {
+    console.error('[POST] /api/conversations/:conversationId/messages error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages (POST) loaded');
+
+// GET /api/conversations/:conversationId/messages - Get messages in conversation
+app.get('/api/conversations/:conversationId/messages', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const messages = await messagesCollection
+      .find({ conversationId: req.params.conversationId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    console.log('[GET] /api/conversations/:conversationId/messages - Found:', messages.length);
+    res.json({ success: true, data: messages });
+  } catch (err) {
+    console.error('[GET] /api/conversations/:conversationId/messages error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages (GET) loaded');
+
+// GET /api/conversations/:conversationId/messages/:messageId - Get single message
+app.get('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const message = await messagesCollection.findOne({ 
+      _id: toObjectId(req.params.messageId)
+    });
+    
+    if (!message) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+    
+    res.json({ success: true, data: message });
+  } catch (err) {
+    console.error('[GET] /api/conversations/:conversationId/messages/:messageId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages/:messageId (GET) loaded');
+
+// PATCH /api/conversations/:conversationId/messages/:messageId - Edit message
+app.patch('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    const { conversationId, messageId } = req.params;
+    
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'userId and text required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const message = await messagesCollection.findOne({ _id: toObjectId(messageId) });
+    if (!message) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+    
+    if (message.senderId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only edit your own messages' });
+    }
+    
+    const updated = await messagesCollection.findOneAndUpdate(
+      { _id: toObjectId(messageId) },
+      { $set: { text, editedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[PATCH] /api/conversations/:conversationId/messages/:messageId - Updated:', messageId);
+    res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[PATCH] /api/conversations/:conversationId/messages/:messageId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages/:messageId (PATCH) loaded');
+
+// DELETE /api/conversations/:conversationId/messages/:messageId - Delete message
+app.delete('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { messageId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const message = await messagesCollection.findOne({ _id: toObjectId(messageId) });
+    if (!message) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+    
+    if (message.senderId !== userId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own messages' });
+    }
+    
+    await messagesCollection.deleteOne({ _id: toObjectId(messageId) });
+    
+    console.log('[DELETE] /api/conversations/:conversationId/messages/:messageId - Deleted:', messageId);
+    res.json({ success: true, message: 'Message deleted' });
+  } catch (err) {
+    console.error('[DELETE] /api/conversations/:conversationId/messages/:messageId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages/:messageId (DELETE) loaded');
+
+// POST /api/conversations/:conversationId/messages/:messageId/reactions - React to message
+app.post('/api/conversations/:conversationId/messages/:messageId/reactions', async (req, res) => {
+  try {
+    const { userId, reaction } = req.body;
+    const { messageId } = req.params;
+    
+    if (!userId || !reaction) {
+      return res.status(400).json({ success: false, error: 'userId and reaction required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const message = await messagesCollection.findOne({ _id: toObjectId(messageId) });
+    if (!message) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+    
+    const reactions = message.reactions || {};
+    reactions[reaction] = reactions[reaction] || [];
+    
+    if (!reactions[reaction].includes(userId)) {
+      reactions[reaction].push(userId);
+    }
+    
+    const updated = await messagesCollection.findOneAndUpdate(
+      { _id: toObjectId(messageId) },
+      { $set: { reactions } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/conversations/:conversationId/messages/:messageId/reactions - User', userId, 'reacted:', reaction);
+    res.json({ success: true, data: { reactions: updated.value.reactions } });
+  } catch (err) {
+    console.error('[POST] /api/conversations/:conversationId/messages/:messageId/reactions error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages/:messageId/reactions (POST) loaded');
+
+// POST /api/conversations/:conversationId/messages/:messageId/replies - Reply to message
+app.post('/api/conversations/:conversationId/messages/:messageId/replies', async (req, res) => {
+  try {
+    const { senderId, text } = req.body;
+    const { messageId } = req.params;
+    
+    if (!senderId || !text) {
+      return res.status(400).json({ success: false, error: 'senderId and text required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const messagesCollection = db.collection('messages');
+    
+    const parentMessage = await messagesCollection.findOne({ _id: toObjectId(messageId) });
+    if (!parentMessage) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+    
+    const reply = {
+      _id: new mongoose.Types.ObjectId(),
+      senderId,
+      text,
+      createdAt: new Date(),
+      reactions: {}
+    };
+    
+    const replies = parentMessage.replies || [];
+    replies.push(reply);
+    
+    const updated = await messagesCollection.findOneAndUpdate(
+      { _id: toObjectId(messageId) },
+      { $set: { replies } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/conversations/:conversationId/messages/:messageId/replies - Added reply:', reply._id);
+    res.status(201).json({ success: true, id: reply._id, data: reply });
+  } catch (err) {
+    console.error('[POST] /api/conversations/:conversationId/messages/:messageId/replies error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/conversations/:conversationId/messages/:messageId/replies (POST) loaded');
+
 // GET /api/stories - Get stories (placeholder, router will override)
 app.get('/api/stories', async (req, res) => {
   try {
