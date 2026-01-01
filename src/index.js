@@ -350,7 +350,7 @@ app.get('/api/users/:uid', async (req, res) => {
     
     // Only add _id if it's a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
     
     console.log('[GET] /api/users/:uid - Query:', JSON.stringify(query));
@@ -804,7 +804,7 @@ app.put('/api/users/:uid', async (req, res) => {
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
     
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
     
     const updateData = {
@@ -844,7 +844,7 @@ app.patch('/api/users/:uid', async (req, res) => {
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
     
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
     
     const updateData = {
@@ -1059,7 +1059,7 @@ app.patch('/api/users/:uid/privacy', async (req, res) => {
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
     
     if (mongoose.Types.ObjectId.isValid(uid)) {
-      query.$or.push({ _id: new mongoose.Types.toObjectId(uid) });
+      query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
     
     const user = await User.findOneAndUpdate(
