@@ -408,25 +408,55 @@ app.get('/api/users/:uid', async (req, res) => {
 console.log('  ✅ /api/users/:uid loaded');
 
 // ============= INLINE USER-SCOPED ROUTES =============
-// GET /api/users/:userId/posts
+// GET /api/users/:userId/posts - Get user's posts with privacy enforcement
 app.get('/api/users/:userId/posts', async (req, res) => {
   try {
     const { userId } = req.params;
     const { requesterUserId } = req.query;
     
     const db = mongoose.connection.db;
+    
+    // Get user to check privacy
+    const usersCollection = db.collection('users');
+    const targetUser = await usersCollection.findOne({ _id: ObjectId(userId) });
+    
+    // Check if user is private
+    if (targetUser?.isPrivate) {
+      // If user is private, only owner or followers can see posts
+      if (!requesterUserId || requesterUserId === 'guest') {
+        console.log('[GET] /api/users/:userId/posts - User is private, access denied');
+        return res.json({ success: true, data: [], message: 'User profile is private' });
+      }
+      
+      if (requesterUserId !== userId) {
+        // Check if requester is follower
+        const followsCollection = db.collection('follows');
+        const isFollower = await followsCollection.findOne({
+          followerId: ObjectId(requesterUserId),
+          followingId: ObjectId(userId)
+        });
+        
+        if (!isFollower) {
+          console.log('[GET] /api/users/:userId/posts - User is private, requester not follower');
+          return res.json({ success: true, data: [], message: 'User profile is private' });
+        }
+      }
+    }
+    
     const postsCollection = db.collection('posts');
     const posts = await postsCollection
       .find({ userId: userId })
       .sort({ createdAt: -1 })
       .toArray();
     
+    console.log('[GET] /api/users/:userId/posts - Returned', posts?.length || 0, 'posts');
     res.json({ success: true, data: posts || [] });
   } catch (err) {
+    console.error('[GET] /api/users/:userId/posts error:', err.message);
     res.status(500).json({ success: false, error: err.message, data: [] });
   }
 });
-console.log('  ✅ /api/users/:userId/posts loaded');
+console.log('  ✅ /api/users/:userId/posts loaded with privacy enforcement');
 
 // GET /api/users/:userId/sections
 app.get('/api/users/:userId/sections', async (req, res) => {
@@ -487,6 +517,104 @@ app.get('/api/users/:userId/stories', async (req, res) => {
   }
 });
 console.log('  ✅ /api/users/:userId/stories loaded');
+
+// POST /api/users/:userId/sections - Create section for user
+app.post('/api/users/:userId/sections', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name, postIds, coverImage } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'Section name required' });
+    }
+
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+
+    // Get max order
+    const lastSection = await sectionsCollection
+      .findOne({ userId }, { sort: { order: -1 } });
+    const nextOrder = (lastSection?.order || 0) + 1;
+
+    const sectionData = {
+      userId,
+      name,
+      postIds: postIds || [],
+      coverImage: coverImage || null,
+      order: nextOrder,
+      createdAt: new Date()
+    };
+
+    const result = await sectionsCollection.insertOne(sectionData);
+    sectionData._id = result.insertedId;
+
+    console.log('[POST] /api/users/:userId/sections - Created:', sectionData._id);
+    res.status(201).json({ success: true, data: sectionData });
+  } catch (err) {
+    console.error('[POST] /api/users/:userId/sections error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/sections (POST) loaded');
+
+// PUT /api/users/:userId/sections/:sectionId - Update section
+app.put('/api/users/:userId/sections/:sectionId', async (req, res) => {
+  try {
+    const { userId, sectionId } = req.params;
+    const { name, postIds, coverImage } = req.body;
+
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (postIds) updateData.postIds = postIds;
+    if (coverImage) updateData.coverImage = coverImage;
+
+    const result = await sectionsCollection.findOneAndUpdate(
+      { _id: ObjectId(sectionId), userId },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    if (!result.value) {
+      return res.status(404).json({ success: false, error: 'Section not found' });
+    }
+
+    console.log('[PUT] /api/users/:userId/sections/:sectionId - Updated:', sectionId);
+    res.status(200).json({ success: true, data: result.value });
+  } catch (err) {
+    console.error('[PUT] /api/users/:userId/sections/:sectionId error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/sections/:sectionId (PUT) loaded');
+
+// DELETE /api/users/:userId/sections/:sectionId - Delete section
+app.delete('/api/users/:userId/sections/:sectionId', async (req, res) => {
+  try {
+    const { userId, sectionId } = req.params;
+
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+
+    const result = await sectionsCollection.deleteOne({
+      _id: ObjectId(sectionId),
+      userId
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Section not found' });
+    }
+
+    console.log('[DELETE] /api/users/:userId/sections/:sectionId - Deleted:', sectionId);
+    res.status(200).json({ success: true, message: 'Section deleted' });
+  } catch (err) {
+    console.error('[DELETE] /api/users/:userId/sections/:sectionId error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/sections/:sectionId (DELETE) loaded');
 
 // Inline fallback auth routes to avoid 404 if router fails to load
 app.post('/api/auth/login-firebase', async (req, res) => {
@@ -943,6 +1071,267 @@ app.patch('/api/users/:uid/privacy', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+console.log('  ✅ /api/users/:uid/privacy loaded');
+
+// POST /api/users/:userId/block/:blockUserId - Block a user
+app.post('/api/users/:userId/block/:blockUserId', async (req, res) => {
+  try {
+    const { userId, blockUserId } = req.params;
+    
+    if (userId === blockUserId) {
+      return res.status(400).json({ success: false, error: 'Cannot block yourself' });
+    }
+    
+    const db = mongoose.connection.db;
+    const blocksCollection = db.collection('blocks');
+    
+    // Check if already blocked
+    const existing = await blocksCollection.findOne({
+      blockerId: ObjectId(userId),
+      blockedId: ObjectId(blockUserId)
+    });
+    
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'User already blocked' });
+    }
+    
+    // Add block
+    const result = await blocksCollection.insertOne({
+      blockerId: ObjectId(userId),
+      blockedId: ObjectId(blockUserId),
+      createdAt: new Date()
+    });
+    
+    console.log('[POST] /api/users/:userId/block/:blockUserId - Blocked user:', blockUserId);
+    res.status(201).json({ success: true, data: { blockId: result.insertedId } });
+  } catch (err) {
+    console.error('[POST] /api/users/:userId/block/:blockUserId error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/block/:blockUserId (POST) loaded');
+
+// DELETE /api/users/:userId/block/:blockUserId - Unblock a user
+app.delete('/api/users/:userId/block/:blockUserId', async (req, res) => {
+  try {
+    const { userId, blockUserId } = req.params;
+    
+    const db = mongoose.connection.db;
+    const blocksCollection = db.collection('blocks');
+    
+    const result = await blocksCollection.deleteOne({
+      blockerId: ObjectId(userId),
+      blockedId: ObjectId(blockUserId)
+    });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Block not found' });
+    }
+    
+    console.log('[DELETE] /api/users/:userId/block/:blockUserId - Unblocked user:', blockUserId);
+    res.status(200).json({ success: true, message: 'User unblocked' });
+  } catch (err) {
+    console.error('[DELETE] /api/users/:userId/block/:blockUserId error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/block/:blockUserId (DELETE) loaded');
+
+// POST /api/posts/:postId/report - Report a post
+app.post('/api/posts/:postId/report', async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { userId, reason, details } = req.body;
+    
+    if (!userId || !reason) {
+      return res.status(400).json({ success: false, error: 'userId and reason required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const reportsCollection = db.collection('reports');
+    
+    // Check if already reported by this user
+    const existing = await reportsCollection.findOne({
+      reporterId: ObjectId(userId),
+      postId: ObjectId(postId)
+    });
+    
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Already reported' });
+    }
+    
+    const result = await reportsCollection.insertOne({
+      postId: ObjectId(postId),
+      reporterId: ObjectId(userId),
+      reason,
+      details: details || '',
+      status: 'pending',
+      createdAt: new Date()
+    });
+    
+    console.log('[POST] /api/posts/:postId/report - Report created:', result.insertedId);
+    res.status(201).json({ success: true, data: { reportId: result.insertedId } });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/report error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/report (POST) loaded');
+
+// POST /api/users/:userId/report - Report a user
+app.post('/api/users/:userId/report', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reporterId, reason, details } = req.body;
+    
+    if (!reporterId || !reason) {
+      return res.status(400).json({ success: false, error: 'reporterId and reason required' });
+    }
+    
+    if (userId === reporterId) {
+      return res.status(400).json({ success: false, error: 'Cannot report yourself' });
+    }
+    
+    const db = mongoose.connection.db;
+    const userReportsCollection = db.collection('user_reports');
+    
+    // Check if already reported
+    const existing = await userReportsCollection.findOne({
+      reporterId: ObjectId(reporterId),
+      userId: ObjectId(userId)
+    });
+    
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Already reported' });
+    }
+    
+    const result = await userReportsCollection.insertOne({
+      userId: ObjectId(userId),
+      reporterId: ObjectId(reporterId),
+      reason,
+      details: details || '',
+      status: 'pending',
+      createdAt: new Date()
+    });
+    
+    console.log('[POST] /api/users/:userId/report - User report created:', result.insertedId);
+    res.status(201).json({ success: true, data: { reportId: result.insertedId } });
+  } catch (err) {
+    console.error('[POST] /api/users/:userId/report error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/report (POST) loaded');
+
+// GET /api/users/:userId/profile-url - Get shareable profile URL
+app.get('/api/users/:userId/profile-url', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Generate profile URL (assuming frontend domain)
+    const profileUrl = `https://trave-social.expo.dev/profile/${userId}`;
+    
+    console.log('[GET] /api/users/:userId/profile-url - Generated:', profileUrl);
+    res.json({ success: true, data: { profileUrl, userId } });
+  } catch (err) {
+    console.error('[GET] /api/users/:userId/profile-url error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/profile-url (GET) loaded');
+
+// GET /api/notifications/:userId - Get user notifications
+app.get('/api/notifications/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, skip = 0 } = req.query;
+    
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+    
+    const notifications = await notificationsCollection
+      .find({ recipientId: ObjectId(userId) })
+      .sort({ createdAt: -1 })
+      .skip(parseInt(skip))
+      .limit(parseInt(limit))
+      .toArray();
+    
+    const total = await notificationsCollection.countDocuments({ recipientId: ObjectId(userId) });
+    
+    console.log('[GET] /api/notifications/:userId - Returned', notifications?.length || 0, 'of', total);
+    res.json({ success: true, data: notifications || [], total });
+  } catch (err) {
+    console.error('[GET] /api/notifications/:userId error:', err.message);
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+console.log('  ✅ /api/notifications/:userId (GET) loaded');
+
+// POST /api/notifications - Create notification (for likes, comments, follows)
+app.post('/api/notifications', async (req, res) => {
+  try {
+    const { recipientId, senderId, type, postId, message } = req.body;
+    
+    if (!recipientId || !senderId || !type) {
+      return res.status(400).json({ success: false, error: 'recipientId, senderId, type required' });
+    }
+    
+    // Don't create notification if recipient is sender
+    if (recipientId === senderId) {
+      return res.status(200).json({ success: true, message: 'Notification not created (self)' });
+    }
+    
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+    
+    const notification = {
+      recipientId: ObjectId(recipientId),
+      senderId: ObjectId(senderId),
+      type, // 'like', 'comment', 'follow', 'mention'
+      postId: postId ? ObjectId(postId) : null,
+      message: message || `${type} notification`,
+      read: false,
+      createdAt: new Date()
+    };
+    
+    const result = await notificationsCollection.insertOne(notification);
+    notification._id = result.insertedId;
+    
+    console.log('[POST] /api/notifications - Created:', type, 'for user:', recipientId);
+    res.status(201).json({ success: true, data: notification });
+  } catch (err) {
+    console.error('[POST] /api/notifications error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/notifications (POST) loaded');
+
+// PATCH /api/notifications/:notificationId/read - Mark notification as read
+app.patch('/api/notifications/:notificationId/read', async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+    
+    const result = await notificationsCollection.findOneAndUpdate(
+      { _id: ObjectId(notificationId) },
+      { $set: { read: true, readAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    
+    if (!result.value) {
+      return res.status(404).json({ success: false, error: 'Notification not found' });
+    }
+    
+    console.log('[PATCH] /api/notifications/:notificationId/read - Marked read');
+    res.json({ success: true, data: result.value });
+  } catch (err) {
+    console.error('[PATCH] /api/notifications/:notificationId/read error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/notifications/:notificationId/read (PATCH) loaded');
 
 console.log('  ✅ Comments and privacy endpoints loaded');
 

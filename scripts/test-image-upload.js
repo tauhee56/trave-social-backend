@@ -9,8 +9,8 @@ async function testImageUpload() {
   try {
     console.log('\n🧪 Testing Image Upload to Backend...\n');
 
-    // Create a simple test image (1x1 red pixel PNG in base64)
-    const testImageBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+    // Create a larger, more valid test image (10x10 red pixel PNG in base64)
+    const testImageBase64 = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAKAAoDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8VAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAA8A/9k=';
 
     // Test 1: Upload to backend
     console.log('📤 Test 1: Uploading image to backend...');
@@ -32,7 +32,13 @@ async function testImageUpload() {
 
     if (uploadRes.data?.data?.url) {
       console.log('✅ Image URL:', uploadRes.data.data.url);
-      console.log('\n✅ Image upload is working correctly!');
+      
+      // Check if it's a Cloudinary URL or fallback
+      if (uploadRes.data.data.url.includes('cloudinary')) {
+        console.log('\n✅✅ SUCCESS: Image uploaded to Cloudinary!');
+      } else if (uploadRes.data.data.url.includes('placeholder')) {
+        console.log('\n⚠️ Image URL is placeholder - Cloudinary may have failed');
+      }
     } else {
       console.error('❌ No URL in response');
     }
