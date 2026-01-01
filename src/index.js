@@ -744,6 +744,36 @@ app.get('/api/conversations', async (req, res) => {
 });
 console.log('  ✅ /api/conversations loaded');
 
+// DEBUG ENDPOINT: POST /api/test/create-conversation - Create test conversation
+app.post('/api/test/create-conversation', async (req, res) => {
+  try {
+    const { userId1, userId2, lastMessage } = req.body;
+    
+    if (!userId1 || !userId2) {
+      return res.status(400).json({ success: false, error: 'userId1 and userId2 required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const convo = {
+      userId1,
+      userId2,
+      participants: [userId1, userId2],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastMessage: lastMessage || 'Hello!',
+      lastMessageTime: new Date()
+    };
+    
+    const result = await db.collection('conversations').insertOne(convo);
+    console.log('✅ TEST: Created conversation:', result.insertedId);
+    
+    res.json({ success: true, data: { _id: result.insertedId, ...convo } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/test/create-conversation loaded');
+
 // GET /api/messages - Get messages (placeholder)
 app.get('/api/messages', async (req, res) => {
   try {
