@@ -19,7 +19,6 @@
     "firebase": "^12.7.0",
     "firebase-admin": "^13.6.0",
     "jsonwebtoken": "^9.0.3",
-    "mongodb": "^7.0.0",
     "mongoose": "^7.6.3",
     "socket.io": "^4.8.1"
   },
