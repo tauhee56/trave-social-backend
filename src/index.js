@@ -81,7 +81,18 @@ if (mongoUri) {
 }
 
 // ============= ROUTES =============
-// CRITICAL: Register these FIRST before any app.use() middleware
+// CRITICAL: Register router-based routes FIRST before inline routes to avoid conflicts
+console.log('🔧 Loading router-based routes first...');
+
+// User routes - REGISTER FIRST for nested routes like /api/users/:userId/posts
+try {
+  app.use('/api/users', require('../routes/users'));
+  console.log('  ✅ /api/users (router) loaded - REGISTERED FIRST');
+} catch (err) {
+  console.warn('  ⚠️ /api/users (router) error:', err.message);
+}
+
+// Then load inline routes
 console.log('🔧 Loading critical inline GET routes...');
 
 app.get('/api/posts', async (req, res) => {
@@ -656,13 +667,7 @@ try {
 }
 
 // User routes - JUST USERS ROUTER, NOT duplicate PUT/PATCH
-// ENABLED: Needed for nested routes like /api/users/:userId/posts
-try {
-  app.use('/api/users', require('../routes/users'));
-  console.log('  ✅ /api/users loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/users error:', err.message);
-}
+// ALREADY REGISTERED AT TOP - DO NOT DUPLICATE
 
 // Conversations routes
 try {
