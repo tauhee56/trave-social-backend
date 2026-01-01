@@ -20,7 +20,7 @@ router.post('/highlights', async (req, res) => {
     const { userId, title, items } = req.body;
     const highlight = new Highlight({ userId, title, items });
     await highlight.save();
-    res.json({ success: true, id: highlight._id });
+    res.status(201).json({ success: true, data: highlight });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

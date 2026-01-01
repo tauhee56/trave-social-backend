@@ -10,6 +10,28 @@ const Section = mongoose.model('Section', new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }));
 
+// POST /api/sections - Create a new section
+router.post('/', async (req, res) => {
+  try {
+    const { userId, name } = req.body;
+    
+    if (!userId || !name) {
+      return res.status(400).json({ success: false, error: 'userId and name required' });
+    }
+
+    // Get max order for this user
+    const lastSection = await Section.findOne({ userId }).sort({ order: -1 });
+    const nextOrder = (lastSection?.order || 0) + 1;
+
+    const section = new Section({ userId, name, order: nextOrder });
+    await section.save();
+
+    res.status(201).json({ success: true, data: section });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Get user sections
 router.get('/users/:userId/sections', async (req, res) => {
   try {

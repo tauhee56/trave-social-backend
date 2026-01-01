@@ -246,6 +246,68 @@ app.post('/api/media/upload', async (req, res) => {
 });
 console.log('  ✅ /api/media/upload loaded');
 
+// ============= INLINE ROUTES FOR MISSING ENDPOINTS =============
+
+// GET /api/conversations - Get conversations (placeholder)
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const conversations = await db.collection('conversations').find({}).limit(20).toArray();
+    res.json({ success: true, data: conversations || [] });
+  } catch (err) {
+    res.json({ success: true, data: [] });
+  }
+});
+console.log('  ✅ /api/conversations loaded');
+
+// GET /api/messages - Get messages (placeholder)
+app.get('/api/messages', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const messages = await db.collection('messages').find({}).limit(50).toArray();
+    res.json({ success: true, data: messages || [] });
+  } catch (err) {
+    res.json({ success: true, data: [] });
+  }
+});
+console.log('  ✅ /api/messages loaded');
+
+// GET /api/stories - Get stories (placeholder, router will override)
+app.get('/api/stories', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const stories = await db.collection('stories').find({ expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }).toArray();
+    res.json({ success: true, data: stories || [] });
+  } catch (err) {
+    res.json({ success: true, data: [] });
+  }
+});
+console.log('  ✅ /api/stories loaded');
+
+// GET /api/highlights - Get highlights (placeholder)
+app.get('/api/highlights', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const highlights = await db.collection('highlights').find({}).limit(20).toArray();
+    res.json({ success: true, data: highlights || [] });
+  } catch (err) {
+    res.json({ success: true, data: [] });
+  }
+});
+console.log('  ✅ /api/highlights loaded');
+
+// GET /api/sections - Get sections (placeholder)
+app.get('/api/sections', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const sections = await db.collection('sections').find({}).sort({ order: 1 }).toArray();
+    res.json({ success: true, data: sections || [] });
+  } catch (err) {
+    res.json({ success: true, data: [] });
+  }
+});
+console.log('  ✅ /api/sections loaded');
+
 // GET /api/users/:uid - Get user profile
 app.get('/api/users/:uid', async (req, res) => {
   try {
@@ -607,6 +669,78 @@ try {
   console.log('  ✅ /api/feed loaded');
 } catch (err) {
   console.warn('  ⚠️ /api/feed error:', err.message);
+}
+
+// Stories routes
+try {
+  app.use('/api/stories', require('../routes/stories'));
+  console.log('  ✅ /api/stories loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/stories error:', err.message);
+}
+
+// Highlights routes
+try {
+  app.use('/api/highlights', require('../routes/highlights'));
+  console.log('  ✅ /api/highlights loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/highlights error:', err.message);
+}
+
+// Sections routes
+try {
+  app.use('/api/sections', require('../routes/sections'));
+  console.log('  ✅ /api/sections loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/sections error:', err.message);
+}
+
+// Comments routes
+try {
+  app.use('/api/comments', require('../routes/comments'));
+  console.log('  ✅ /api/comments loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/comments error:', err.message);
+}
+
+// Follow routes
+try {
+  app.use('/api/follow', require('../routes/follow'));
+  console.log('  ✅ /api/follow loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/follow error:', err.message);
+}
+
+// Saved posts routes
+try {
+  app.use('/api/saved', require('../routes/saved'));
+  console.log('  ✅ /api/saved loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/saved error:', err.message);
+}
+
+// Moderation routes
+try {
+  app.use('/api/moderation', require('../routes/moderation'));
+  console.log('  ✅ /api/moderation loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/moderation error:', err.message);
+}
+
+// Notifications routes
+try {
+  app.use('/api/notifications', require('../routes/notification'));
+  console.log('  ✅ /api/notifications loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/notifications error:', err.message);
+}
+
+// Categories routes
+try {
+  app.use('/api/categories', require('../routes/categories'));
+  console.log('  ✅ /api/categories loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/categories error:', err.message);
 }
 
 console.log('✅ Routes loading complete');

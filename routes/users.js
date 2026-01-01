@@ -330,4 +330,85 @@ router.patch('/:userId/privacy', async (req, res) => {
   }
 });
 
+// POST /api/users/:userId/sections - Create a new section
+router.post('/:userId/sections', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name, postIds, coverImage } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'Section name required' });
+    }
+
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+
+    // Get max order for this user
+    const lastSection = await sectionsCollection
+      .findOne({ userId }, { sort: { order: -1 } });
+    const nextOrder = (lastSection?.order || 0) + 1;
+
+    const sectionData = {
+      userId,
+      name,
+      postIds: postIds || [],
+      coverImage: coverImage || null,
+      order: nextOrder,
+      createdAt: new Date()
+    };
+
+    const result = await sectionsCollection.insertOne(sectionData);
+    sectionData._id = result.insertedId;
+
+    res.status(201).json({ success: true, data: sectionData });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/users/:userId/sections - Get user sections (with privacy check)
+router.get('/:userId/sections', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { requesterUserId } = req.query;
+    
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+    const usersCollection = db.collection('users');
+    const followsCollection = db.collection('follows');
+    
+    // Check if user is private
+    const targetUser = await usersCollection.findOne({
+      $or: [
+        { firebaseUid: userId },
+        { uid: userId },
+        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
+      ]
+    });
+    
+    // If user is private, check access permission
+    if (targetUser?.isPrivate && requesterUserId && requesterUserId !== userId) {
+      const follows = await followsCollection.findOne({
+        followerId: requesterUserId,
+        followingId: userId
+      });
+      
+      if (!follows) {
+        return res.json({ success: true, data: [] });
+      }
+    } else if (targetUser?.isPrivate && !requesterUserId) {
+      return res.json({ success: true, data: [] });
+    }
+    
+    const sections = await sectionsCollection
+      .find({ userId })
+      .sort({ order: 1 })
+      .toArray();
+    
+    res.json({ success: true, data: sections || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
 module.exports = router;
