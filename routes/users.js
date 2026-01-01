@@ -366,49 +366,4 @@ router.post('/:userId/sections', async (req, res) => {
   }
 });
 
-// GET /api/users/:userId/sections - Get user sections (with privacy check)
-router.get('/:userId/sections', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { requesterUserId } = req.query;
-    
-    const db = mongoose.connection.db;
-    const sectionsCollection = db.collection('sections');
-    const usersCollection = db.collection('users');
-    const followsCollection = db.collection('follows');
-    
-    // Check if user is private
-    const targetUser = await usersCollection.findOne({
-      $or: [
-        { firebaseUid: userId },
-        { uid: userId },
-        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
-      ]
-    });
-    
-    // If user is private, check access permission
-    if (targetUser?.isPrivate && requesterUserId && requesterUserId !== userId) {
-      const follows = await followsCollection.findOne({
-        followerId: requesterUserId,
-        followingId: userId
-      });
-      
-      if (!follows) {
-        return res.json({ success: true, data: [] });
-      }
-    } else if (targetUser?.isPrivate && !requesterUserId) {
-      return res.json({ success: true, data: [] });
-    }
-    
-    const sections = await sectionsCollection
-      .find({ userId })
-      .sort({ order: 1 })
-      .toArray();
-    
-    res.json({ success: true, data: sections || [] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message, data: [] });
-  }
-});
-
 module.exports = router;
