@@ -236,26 +236,30 @@ app.post('/api/media/upload', async (req, res) => {
     if (!mediaFile) {
       return res.status(400).json({ success: false, error: 'No file/image provided' });
     }
-    
-    // For now, return a mock URL - in production, upload to cloud storage
-    // If image is a base64 or URI, we can use it as-is or upload to Cloudinary/S3
-    const mockUrl = `https://via.placeholder.com/400x400?text=${encodeURIComponent(mediaName)}`;
-    
-    // If image/file looks like base64 or data URI, store it and return a URL
-    const isBase64 = typeof mediaFile === 'string' && (mediaFile.includes('base64') || mediaFile.startsWith('data:'));
-    const isURI = typeof mediaFile === 'string' && mediaFile.startsWith('file://');
-    
-    // Return the image data or a mock URL
-    const url = isBase64 || isURI ? mockUrl : mediaFile;
-    
-    console.log('[POST] /api/media/upload - returning', url);
-    return res.json({ success: true, data: { url, fileName: mediaName } });
+
+    // Upload to Cloudinary
+    try {
+      const result = await cloudinary.uploader.upload(mediaFile, {
+        folder: 'trave-social/uploads',
+        resource_type: 'auto',
+        quality: 'auto',
+        fetch_format: 'auto'
+      });
+
+      console.log('[POST] /api/media/upload - Cloudinary upload successful:', result.secure_url);
+      return res.json({ success: true, data: { url: result.secure_url, fileName: mediaName } });
+    } catch (cloudinaryErr) {
+      console.error('[POST] /api/media/upload - Cloudinary error:', cloudinaryErr.message);
+      // Fallback: return data URI or mock URL
+      const mockUrl = `https://via.placeholder.com/400x400?text=${encodeURIComponent(mediaName)}`;
+      return res.json({ success: true, data: { url: mockUrl, fileName: mediaName } });
+    }
   } catch (err) {
     console.error('[POST] /api/media/upload error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-console.log('  ✅ /api/media/upload loaded');
+console.log('  ✅ /api/media/upload loaded (with Cloudinary)');
 
 // ============= INLINE ROUTES FOR MISSING ENDPOINTS =============
 
@@ -395,6 +399,87 @@ app.get('/api/users/:uid', async (req, res) => {
   }
 });
 console.log('  ✅ /api/users/:uid loaded');
+
+// ============= INLINE USER-SCOPED ROUTES =============
+// GET /api/users/:userId/posts
+app.get('/api/users/:userId/posts', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { requesterUserId } = req.query;
+    
+    const db = mongoose.connection.db;
+    const postsCollection = db.collection('posts');
+    const posts = await postsCollection
+      .find({ userId: userId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    res.json({ success: true, data: posts || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+console.log('  ✅ /api/users/:userId/posts loaded');
+
+// GET /api/users/:userId/sections
+app.get('/api/users/:userId/sections', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { requesterUserId } = req.query;
+    
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+    const sections = await sectionsCollection
+      .find({ userId: userId })
+      .sort({ order: 1 })
+      .toArray();
+    
+    res.json({ success: true, data: sections || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+console.log('  ✅ /api/users/:userId/sections loaded');
+
+// GET /api/users/:userId/highlights
+app.get('/api/users/:userId/highlights', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { requesterUserId } = req.query;
+    
+    const db = mongoose.connection.db;
+    const highlightsCollection = db.collection('highlights');
+    const highlights = await highlightsCollection
+      .find({ userId: userId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    res.json({ success: true, data: highlights || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+console.log('  ✅ /api/users/:userId/highlights loaded');
+
+// GET /api/users/:userId/stories
+app.get('/api/users/:userId/stories', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { requesterUserId } = req.query;
+    
+    const db = mongoose.connection.db;
+    const storiesCollection = db.collection('stories');
+    const stories = await storiesCollection
+      .find({ userId: userId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    res.json({ success: true, data: stories || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+console.log('  ✅ /api/users/:userId/stories loaded');
 
 // Inline fallback auth routes to avoid 404 if router fails to load
 app.post('/api/auth/login-firebase', async (req, res) => {
