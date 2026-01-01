@@ -229,7 +229,11 @@ app.get('/api/categories', async (req, res) => {
 app.get('/api/live-streams', async (req, res) => {
   console.log('  → GET /api/live-streams called');
   try {
-    const streams = await mongoose.model('LiveStream').find({ isActive: true }).catch(() => []);
+    const db = mongoose.connection.db;
+    const streams = await db.collection('livestreams')
+      .find({ isActive: true })
+      .toArray()
+      .catch(() => []);
     console.log('  ✓ /api/live-streams returning 200 with', Array.isArray(streams) ? streams.length : 0, 'streams');
     res.status(200).json({ success: true, data: Array.isArray(streams) ? streams : [] });
   } catch (err) {
@@ -237,6 +241,206 @@ app.get('/api/live-streams', async (req, res) => {
     res.status(200).json({ success: true, data: [] });
   }
 });
+console.log('  ✅ /api/live-streams (GET) loaded');
+
+// GET /api/live-streams/:streamId - Get single live stream
+app.get('/api/live-streams/:streamId', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const stream = await db.collection('livestreams').findOne({ 
+      _id: toObjectId(req.params.streamId) 
+    });
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    res.json({ success: true, data: stream });
+  } catch (err) {
+    console.error('[GET] /api/live-streams/:streamId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId (GET) loaded');
+
+// POST /api/live-streams - Start new live stream
+app.post('/api/live-streams', async (req, res) => {
+  try {
+    const { userId, title } = req.body;
+    if (!userId || !title) {
+      return res.status(400).json({ success: false, error: 'userId and title required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+    
+    const newStream = {
+      userId,
+      title,
+      isActive: true,
+      viewers: [],
+      viewerCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const result = await livestreamsCollection.insertOne(newStream);
+    
+    console.log('[POST] /api/live-streams - Stream started:', result.insertedId);
+    res.status(201).json({ success: true, id: result.insertedId, data: newStream });
+  } catch (err) {
+    console.error('[POST] /api/live-streams error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams (POST) loaded');
+
+// PATCH /api/live-streams/:streamId/end - End live stream
+app.patch('/api/live-streams/:streamId/end', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { streamId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+    
+    const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    if (stream.userId !== userId) {
+      return res.status(403).json({ success: false, error: 'Only stream owner can end the stream' });
+    }
+    
+    const updated = await livestreamsCollection.findOneAndUpdate(
+      { _id: toObjectId(streamId) },
+      { $set: { isActive: false, endedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[PATCH] /api/live-streams/:streamId/end - Stream ended:', streamId);
+    res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[PATCH] /api/live-streams/:streamId/end error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/end (PATCH) loaded');
+
+// POST /api/live-streams/:streamId/agora-token - Generate Agora token
+app.post('/api/live-streams/:streamId/agora-token', async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+    const { streamId } = req.params;
+    
+    if (!userId || !role) {
+      return res.status(400).json({ success: false, error: 'userId and role required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+    
+    const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    // Generate Agora token (using RTC token v2 approach)
+    // In production, use agora-token-builder package for proper token generation
+    const agoraAppId = process.env.AGORA_APP_ID || 'demo-app-id';
+    const agoraAppCertificate = process.env.AGORA_APP_CERTIFICATE || 'demo-app-certificate';
+    
+    // Simple token format (for demo - use proper agora-token-builder in production)
+    const token = Buffer.from(
+      JSON.stringify({
+        appId: agoraAppId,
+        channelName: streamId,
+        userId: userId,
+        role: role,
+        expirationSeconds: 3600,
+        timestamp: Math.floor(Date.now() / 1000)
+      })
+    ).toString('base64');
+    
+    // Add viewer to stream if subscriber
+    if (role === 'subscriber') {
+      const viewers = stream.viewers || [];
+      if (!viewers.includes(userId)) {
+        viewers.push(userId);
+        await livestreamsCollection.updateOne(
+          { _id: toObjectId(streamId) },
+          { 
+            $set: { 
+              viewers,
+              viewerCount: viewers.length
+            }
+          }
+        );
+      }
+    }
+    
+    console.log('[POST] /api/live-streams/:streamId/agora-token - Token generated for', userId, 'role:', role);
+    res.json({ 
+      success: true, 
+      token,
+      agoraAppId,
+      channelName: streamId,
+      userId,
+      role,
+      expirationSeconds: 3600
+    });
+  } catch (err) {
+    console.error('[POST] /api/live-streams/:streamId/agora-token error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/agora-token (POST) loaded');
+
+// POST /api/live-streams/:streamId/leave - User leaves stream
+app.post('/api/live-streams/:streamId/leave', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { streamId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+    
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+    
+    const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    const viewers = stream.viewers || [];
+    const updatedViewers = viewers.filter(v => v !== userId);
+    
+    const updated = await livestreamsCollection.findOneAndUpdate(
+      { _id: toObjectId(streamId) },
+      { 
+        $set: { 
+          viewers: updatedViewers,
+          viewerCount: updatedViewers.length
+        }
+      },
+      { returnDocument: 'after' }
+    );
+    
+    console.log('[POST] /api/live-streams/:streamId/leave - User', userId, 'left stream');
+    res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[POST] /api/live-streams/:streamId/leave error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/live-streams/:streamId/leave (POST) loaded');
 
 console.log('✅ Critical inline routes registered: /api/posts, /api/categories, /api/live-streams');
 
