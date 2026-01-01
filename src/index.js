@@ -714,25 +714,31 @@ console.log('  ✅ /api/media/upload loaded (with Cloudinary)');
 app.get('/api/conversations', async (req, res) => {
   try {
     const userId = req.query.userId || req.headers['x-user-id'];
+    
+    // Return empty if no userId
+    if (!userId) {
+      return res.json({ success: true, data: [] });
+    }
+    
     const db = mongoose.connection.db;
     
-    // If userId provided, filter conversations for that user
-    const query = userId ? { 
-      $or: [
-        { userId1: userId }, 
-        { userId2: userId },
-        { participants: userId }
-      ]
-    } : {};
-    
+    // Query with index optimization
     const conversations = await db.collection('conversations')
-      .find(query)
+      .find({ 
+        $or: [
+          { userId1: userId }, 
+          { userId2: userId },
+          { participants: userId }
+        ]
+      })
+      .maxTimeMS(5000)  // 5 second timeout
       .sort({ updatedAt: -1 })
       .limit(50)
       .toArray();
     
     res.json({ success: true, data: conversations || [] });
   } catch (err) {
+    console.error('[GET] /api/conversations - Error:', err.message);
     res.json({ success: true, data: [] });
   }
 });
