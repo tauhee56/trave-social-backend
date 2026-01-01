@@ -241,29 +241,28 @@ app.post('/api/media/upload', async (req, res) => {
     const mediaFile = file || image;
     const mediaName = fileName || path || 'media';
     
+    console.log('[POST] /api/media/upload - Received request');
+    console.log('[POST] /api/media/upload - mediaFile length:', mediaFile?.length);
+    console.log('[POST] /api/media/upload - mediaName:', mediaName);
+    
     if (!mediaFile) {
       return res.status(400).json({ success: false, error: 'No file/image provided' });
     }
 
     // Upload to Cloudinary
-    try {
-      const result = await cloudinary.uploader.upload(mediaFile, {
-        folder: 'trave-social/uploads',
-        resource_type: 'auto',
-        quality: 'auto',
-        fetch_format: 'auto'
-      });
+    console.log('[POST] /api/media/upload - Attempting Cloudinary upload...');
+    const result = await cloudinary.uploader.upload(mediaFile, {
+      folder: 'trave-social/uploads',
+      resource_type: 'auto',
+      quality: 'auto',
+      fetch_format: 'auto'
+    });
 
-      console.log('[POST] /api/media/upload - Cloudinary upload successful:', result.secure_url);
-      return res.json({ success: true, data: { url: result.secure_url, fileName: mediaName } });
-    } catch (cloudinaryErr) {
-      console.error('[POST] /api/media/upload - Cloudinary error:', cloudinaryErr.message);
-      // Fallback: return data URI or mock URL
-      const mockUrl = `https://via.placeholder.com/400x400?text=${encodeURIComponent(mediaName)}`;
-      return res.json({ success: true, data: { url: mockUrl, fileName: mediaName } });
-    }
+    console.log('[POST] /api/media/upload - ✅ Cloudinary upload successful:', result.secure_url);
+    return res.json({ success: true, data: { url: result.secure_url, fileName: mediaName } });
   } catch (err) {
-    console.error('[POST] /api/media/upload error:', err.message);
+    console.error('[POST] /api/media/upload - ❌ Error:', err.message);
+    console.error('[POST] /api/media/upload - Stack:', err.stack);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
