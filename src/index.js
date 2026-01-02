@@ -123,14 +123,21 @@ try {
 console.log('🔧 Loading critical inline GET routes...');
 
 app.get('/api/posts', async (req, res) => {
-  console.log('🟢 [INLINE] GET /api/posts CALLED');
+  console.log('🟢 [INLINE] GET /api/posts CALLED with query:', req.query);
   try {
+    const { skip = 0, limit = 50 } = req.query;
     const posts = await mongoose.model('Post').find()
       .sort({ createdAt: -1 })
-      .limit(50)
+      .skip(parseInt(skip))
+      .limit(parseInt(limit))
       .populate('userId', 'displayName name avatar profilePicture photoURL')
       .catch(() => []);
+    
     console.log('🟢 [INLINE] /api/posts SUCCESS - returning', Array.isArray(posts) ? posts.length : 0, 'posts');
+    posts.forEach(p => {
+      console.log(`  Post: id=${p._id}, userId=${p.userId?._id}, isPrivate=${p.isPrivate}, category=${p.category}`);
+    });
+    
     res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
   } catch (err) {
     console.log('🟢 [INLINE] /api/posts ERROR:', err.message);
