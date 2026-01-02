@@ -136,21 +136,35 @@ app.get('/api/posts', async (req, res) => {
     // Ensure likesCount and commentCount are included
     const enrichedPosts = posts.map(post => {
       const postObj = post.toObject ? post.toObject() : post;
-      const likesArray = postObj.likes || [];
-      const commentsArray = postObj.comments || [];
       
-      console.log(`  [POST] Before enrichment - id=${postObj._id}, likes type=${typeof likesArray}, likes=${JSON.stringify(likesArray).substring(0, 50)}`);
+      // Calculate likes count - use existing likesCount if present, otherwise calculate from likes array
+      let likesCount = postObj.likesCount;
+      const likesArray = postObj.likes || [];
+      const calculatedCount = Array.isArray(likesArray) ? likesArray.length : (typeof likesArray === 'object' ? Object.keys(likesArray).length : 0);
+      
+      if (!likesCount || likesCount === undefined || likesCount === 0) {
+        likesCount = calculatedCount;
+      }
+      
+      // Calculate comments count
+      let commentCount = postObj.commentCount;
+      if (!commentCount || commentCount === undefined) {
+        const commentsArray = postObj.comments || [];
+        commentCount = Array.isArray(commentsArray) ? commentsArray.length : (typeof commentsArray === 'object' ? Object.keys(commentsArray).length : 0);
+      }
+      
+      console.log(`  [POST] id=${postObj._id}, likes=${JSON.stringify(postObj.likes)}, likesCount=${postObj.likesCount}, calculated=${calculatedCount}, final=${likesCount}`);
       
       return {
         ...postObj,
-        likesCount: Array.isArray(likesArray) ? likesArray.length : (typeof likesArray === 'object' ? Object.keys(likesArray).length : 0),
-        commentCount: Array.isArray(commentsArray) ? commentsArray.length : (typeof commentsArray === 'object' ? Object.keys(commentsArray).length : 0)
+        likesCount,
+        commentCount
       };
     });
     
     console.log('🟢 [INLINE] /api/posts SUCCESS - returning', enrichedPosts.length, 'posts');
-    enrichedPosts.slice(0, 3).forEach(p => {
-      console.log(`  Post: id=${p._id}, userId=${p.userId?._id}, likes=${p.likesCount}, comments=${p.commentCount}`);
+    enrichedPosts.slice(0, 1).forEach(p => {
+      console.log(`  Post response: id=${p._id}, likesCount=${p.likesCount}, commentCount=${p.commentCount}`);
     });
     
     res.status(200).json({ success: true, data: enrichedPosts });
