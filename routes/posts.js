@@ -4,64 +4,51 @@ const Post = require('../models/Post');
 const mongoose = require('mongoose');
 
 
-// GET /api/posts - Get all posts (public posts only, excluding private users unless requester is their follower)
+// GET /api/posts - Get all posts (supports taggedUserId filter, privacy-aware)
 router.get('/', async (req, res) => {
   try {
-    const { userId, limit = 50 } = req.query;
+    const { userId, requesterUserId, taggedUserId, limit = 50 } = req.query;
+    const viewerId = requesterUserId || userId; // backward compatibility with older clients
     const db = mongoose.connection.db;
     const usersCollection = db.collection('users');
     const followsCollection = db.collection('follows');
-    
-    // Get posts
-    let posts = await Post.find().sort({ createdAt: -1 }).limit(Math.min(parseInt(limit) * 2, 100));
-    
-    // Filter out posts from private users if not their follower
-    if (userId) {
-      // Get list of users that current user follows
-      const follows = await followsCollection.find({ followerId: userId }).toArray();
-      const followingIds = follows.map(f => f.followingId);
-      
-      posts = await Promise.all(posts.map(async (post) => {
-        // Check if post author is private
-        const postAuthor = await usersCollection.findOne({ 
-          $or: [
-            { firebaseUid: post.userId },
-            { uid: post.userId },
-            { _id: mongoose.Types.ObjectId.isValid(post.userId) ? new mongoose.Types.ObjectId(post.userId) : null }
-          ]
-        });
-        
-        // If author is private and not the current user and current user doesn't follow them, skip
-        if (postAuthor?.isPrivate && post.userId !== userId && !followingIds.includes(post.userId)) {
-          return null;
-        }
-        
-        return post;
-      }));
-      
-      posts = posts.filter(p => p !== null).slice(0, parseInt(limit));
-    } else {
-      // If no userId provided, only show posts from public users
-      posts = await Promise.all(posts.map(async (post) => {
-        const postAuthor = await usersCollection.findOne({ 
-          $or: [
-            { firebaseUid: post.userId },
-            { uid: post.userId },
-            { _id: mongoose.Types.ObjectId.isValid(post.userId) ? new mongoose.Types.ObjectId(post.userId) : null }
-          ]
-        });
-        
-        // Skip if author is private
-        if (postAuthor?.isPrivate) {
-          return null;
-        }
-        
-        return post;
-      }));
-      
-      posts = posts.filter(p => p !== null).slice(0, parseInt(limit));
-    }
-    
+
+    // Build query (optionally filter by tagged user)
+    const query = taggedUserId ? { taggedUserIds: taggedUserId } : {};
+
+    // Get posts (over-fetch a bit then privacy filter)
+    let posts = await Post.find(query)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(parseInt(limit) * 2, 100));
+
+    // If viewer present, precompute follow list for privacy checks
+    const followingIds = viewerId
+      ? (await followsCollection.find({ followerId: viewerId }).toArray()).map(f => f.followingId)
+      : [];
+
+    posts = await Promise.all(posts.map(async (post) => {
+      // Check if post author is private
+      const postAuthor = await usersCollection.findOne({
+        $or: [
+          { firebaseUid: post.userId },
+          { uid: post.userId },
+          { _id: mongoose.Types.ObjectId.isValid(post.userId) ? new mongoose.Types.ObjectId(post.userId) : null }
+        ]
+      });
+
+      // Deny if author private and viewer is neither self nor follower
+      if (postAuthor?.isPrivate) {
+        if (!viewerId) return null;
+        const isSelf = post.userId === viewerId;
+        const isFollower = followingIds.includes(post.userId);
+        if (!isSelf && !isFollower) return null;
+      }
+
+      return post;
+    }));
+
+    posts = posts.filter(Boolean).slice(0, parseInt(limit));
+
     res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
   } catch (err) {
     console.error('[GET /posts] Error:', err.message);

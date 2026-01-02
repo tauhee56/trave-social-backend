@@ -22,6 +22,42 @@ try {
   User = mongoose.model('User', userSchema);
 }
 
+// GET /api/users/search - Search for users by displayName, email, or bio
+// MUST BE BEFORE /:userId route to match correctly
+router.get('/search', async (req, res) => {
+  try {
+    const { q, limit = 20 } = req.query;
+    
+    if (!q || q.trim().length === 0) {
+      console.log('[GET /search] Empty query, returning empty results');
+      return res.json({ success: true, data: [] });
+    }
+    
+    // Search by displayName, email, or bio
+    const searchRegex = new RegExp(q.trim(), 'i');
+    
+    console.log('[GET /search] Searching for:', q, 'with limit:', limit);
+    
+    const users = await User.find({
+      $or: [
+        { displayName: searchRegex },
+        { email: searchRegex },
+        { bio: searchRegex }
+      ]
+    })
+      .limit(parseInt(limit) || 20)
+      .select('_id firebaseUid displayName avatar bio followers following')
+      .exec();
+    
+    console.log('[GET /search] Found', users.length, 'users');
+    
+    res.json({ success: true, data: users });
+  } catch (err) {
+    console.error('[GET /search] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
 // GET /api/users/:userId - Get user profile
 router.get('/:userId', async (req, res) => {
   try {
@@ -362,6 +398,37 @@ router.post('/:userId/sections', async (req, res) => {
 
     res.status(201).json({ success: true, data: sectionData });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PATCH /api/users/:userId/sections-order - Update section order
+router.patch('/:userId/sections-order', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { sections } = req.body;
+
+    if (!Array.isArray(sections)) {
+      return res.status(400).json({ success: false, error: 'sections array required' });
+    }
+
+    const db = mongoose.connection.db;
+    const sectionsCollection = db.collection('sections');
+
+    // Update order for each section
+    const updatePromises = sections.map(async (section, index) => {
+      return sectionsCollection.updateOne(
+        { _id: new mongoose.Types.ObjectId(section._id), userId },
+        { $set: { order: index, updatedAt: new Date() } }
+      );
+    });
+
+    await Promise.all(updatePromises);
+
+    console.log(`✅ Section order updated for user ${userId}`);
+    res.json({ success: true, message: 'Section order updated' });
+  } catch (err) {
+    console.error('[PATCH /:userId/sections-order] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

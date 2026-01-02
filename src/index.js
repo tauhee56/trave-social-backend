@@ -144,16 +144,17 @@ app.post('/api/posts', async (req, res) => {
     const { userId, content, caption, mediaUrls, imageUrls, location, locationData, mediaType, category, hashtags, mentions, taggedUserIds } = req.body;
     
     // Accept both 'content' and 'caption' for compatibility
-    const finalContent = content || caption;
-    
-    if (!userId || !finalContent) {
-      return res.status(400).json({ success: false, error: 'userId and caption/content required' });
-    }
-    
-    const Post = mongoose.model('Post');
+    const finalContent = content || caption || '';
     
     // Handle both single imageUrl and mediaUrls array
     const images = mediaUrls && mediaUrls.length > 0 ? mediaUrls : (imageUrls ? imageUrls : []);
+    
+    // Validation: Either content or media is required
+    if (!userId || (!finalContent && (!images || images.length === 0))) {
+      return res.status(400).json({ success: false, error: 'userId and either caption or media required' });
+    }
+    
+    const Post = mongoose.model('Post');
     
     const newPost = new Post({
       userId,
