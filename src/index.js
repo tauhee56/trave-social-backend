@@ -1696,6 +1696,14 @@ try {
   console.warn('  ⚠️ /api/notifications error:', err.message);
 }
 
+// Upload routes
+try {
+  app.use('/api/upload', require('../routes/upload'));
+  console.log('  ✅ /api/upload loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/upload error:', err.message);
+}
+
 // Categories routes
 try {
   app.use('/api/categories', require('../routes/categories'));
