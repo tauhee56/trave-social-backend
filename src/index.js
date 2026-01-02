@@ -1247,6 +1247,8 @@ app.get('/api/users/:userId/sections', async (req, res) => {
     const { userId } = req.params;
     const { requesterUserId } = req.query;
     
+    console.log('[GET] /api/users/:userId/sections - userId:', userId, 'requesterUserId:', requesterUserId);
+    
     const db = mongoose.connection.db;
     const sectionsCollection = db.collection('sections');
     const sections = await sectionsCollection
@@ -1254,8 +1256,11 @@ app.get('/api/users/:userId/sections', async (req, res) => {
       .sort({ order: 1 })
       .toArray();
     
+    console.log('[GET] /api/users/:userId/sections - Found', sections.length, 'sections for user:', userId);
+    
     res.json({ success: true, data: sections || [] });
   } catch (err) {
+    console.error('[GET] /api/users/:userId/sections error:', err.message);
     res.status(500).json({ success: false, error: err.message, data: [] });
   }
 });
@@ -1307,6 +1312,8 @@ app.post('/api/users/:userId/sections', async (req, res) => {
     const { userId } = req.params;
     const { name, postIds, coverImage } = req.body;
 
+    console.log('[POST] /api/users/:userId/sections - Creating section for userId:', userId, 'name:', name);
+
     if (!name) {
       return res.status(400).json({ success: false, error: 'Section name required' });
     }
@@ -1331,7 +1338,7 @@ app.post('/api/users/:userId/sections', async (req, res) => {
     const result = await sectionsCollection.insertOne(sectionData);
     sectionData._id = result.insertedId;
 
-    console.log('[POST] /api/users/:userId/sections - Created:', sectionData._id);
+    console.log('[POST] /api/users/:userId/sections - Created section:', sectionData._id, 'for user:', userId);
     res.status(201).json({ success: true, data: sectionData });
   } catch (err) {
     console.error('[POST] /api/users/:userId/sections error:', err.message);
