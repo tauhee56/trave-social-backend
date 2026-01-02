@@ -126,18 +126,20 @@ app.get('/api/posts', async (req, res) => {
   console.log('🟢 [INLINE] GET /api/posts CALLED with query:', req.query);
   try {
     const { skip = 0, limit = 50 } = req.query;
+    const currentUserId = req.headers.userid || null; // Get current user from header (optional)
+    
     const posts = await mongoose.model('Post').find()
       .sort({ createdAt: -1 })
       .skip(parseInt(skip))
       .limit(parseInt(limit))
-      .populate('userId', 'displayName name avatar profilePicture photoURL')
+      .populate('userId', 'displayName name avatar profilePicture photoURL isPrivate followers')
       .catch(() => []);
     
-    // Ensure likesCount and commentCount are included
+    // Enrich posts and apply privacy filter
     const enrichedPosts = posts.map(post => {
       const postObj = post.toObject ? post.toObject() : post;
       
-      // Calculate likes count - use existing likesCount if present, otherwise calculate from likes array
+      // Calculate likes count
       let likesCount = postObj.likesCount;
       const likesArray = postObj.likes || [];
       const calculatedCount = Array.isArray(likesArray) ? likesArray.length : (typeof likesArray === 'object' ? Object.keys(likesArray).length : 0);
@@ -153,18 +155,18 @@ app.get('/api/posts', async (req, res) => {
         commentCount = Array.isArray(commentsArray) ? commentsArray.length : (typeof commentsArray === 'object' ? Object.keys(commentsArray).length : 0);
       }
       
-      console.log(`  [POST] id=${postObj._id}, likes=${JSON.stringify(postObj.likes)}, likesCount=${postObj.likesCount}, calculated=${calculatedCount}, final=${likesCount}`);
-      
       return {
         ...postObj,
         likesCount,
-        commentCount
+        commentCount,
+        isPrivate: postObj.isPrivate || false,
+        allowedFollowers: postObj.allowedFollowers || []
       };
     });
     
     console.log('🟢 [INLINE] /api/posts SUCCESS - returning', enrichedPosts.length, 'posts');
     enrichedPosts.slice(0, 1).forEach(p => {
-      console.log(`  Post response: id=${p._id}, likesCount=${p.likesCount}, commentCount=${p.commentCount}`);
+      console.log(`  Post response: id=${p._id}, likesCount=${p.likesCount}, isPrivate=${p.isPrivate}, allowedFollowers=${p.allowedFollowers?.length || 0}`);
     });
     
     res.status(200).json({ success: true, data: enrichedPosts });
@@ -180,9 +182,19 @@ app.get('/api/posts/feed', async (req, res) => {
     const posts = await mongoose.model('Post').find()
       .sort({ createdAt: -1 })
       .limit(50)
-      .populate('userId', 'displayName name avatar profilePicture photoURL')
+      .populate('userId', 'displayName name avatar profilePicture photoURL isPrivate followers')
       .catch(() => []);
-    res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
+    
+    const enrichedPosts = (Array.isArray(posts) ? posts : []).map(p => {
+      const postObj = p.toObject ? p.toObject() : p;
+      return {
+        ...postObj,
+        isPrivate: postObj.isPrivate || false,
+        allowedFollowers: postObj.allowedFollowers || []
+      };
+    });
+    
+    res.status(200).json({ success: true, data: enrichedPosts });
   } catch (err) {
     res.status(200).json({ success: true, data: [] });
   }
@@ -229,6 +241,12 @@ app.post('/api/posts', async (req, res) => {
     }
     
     const Post = mongoose.model('Post');
+    const User = mongoose.model('User');
+    
+    // Get user's privacy setting
+    const user = await User.findById(userId).catch(() => null);
+    const isPrivate = user?.isPrivate || false;
+    const allowedFollowers = isPrivate ? (user?.followers || []) : []; // If private, only followers can see
     
     const newPost = new Post({
       userId,
@@ -247,6 +265,8 @@ app.post('/api/posts', async (req, res) => {
       likesCount: 0,
       comments: 0,
       commentsCount: 0,
+      isPrivate,
+      allowedFollowers,
       createdAt: new Date(),
     });
     

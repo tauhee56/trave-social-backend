@@ -24,6 +24,8 @@ const PostSchema = new mongoose.Schema({
   likesCount: { type: Number, default: 0 },
   comments: { type: Number, default: 0 },
   commentsCount: { type: Number, default: 0 },
+  isPrivate: { type: Boolean, default: false }, // Privacy flag: true = private account post
+  allowedFollowers: { type: [String], default: [] }, // Array of follower IDs who can see this private post
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
