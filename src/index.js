@@ -1992,12 +1992,16 @@ app.post('/api/posts/:postId/like', async (req, res) => {
     const { postId } = req.params;
     const { userId } = req.body;
     
+    console.log('[POST] /api/posts/:postId/like called - postId:', postId, 'userId:', userId);
+    
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
     
     const Post = mongoose.model('Post');
     const post = await Post.findById(postId);
+    
+    console.log('[POST] /api/posts/:postId/like - Found post:', !!post, 'existing likes:', post?.likes?.length || 0);
     
     if (!post) {
       return res.status(404).json({ success: false, error: 'Post not found' });
@@ -2007,14 +2011,15 @@ app.post('/api/posts/:postId/like', async (req, res) => {
     
     // Check if already liked
     if (post.likes.includes(userId)) {
+      console.log('[POST] /api/posts/:postId/like - Already liked');
       return res.status(400).json({ success: false, error: 'Already liked' });
     }
     
     post.likes.push(userId);
-    await post.save();
+    const savedPost = await post.save();
     
-    console.log('[POST] /api/posts/:postId/like - User', userId, 'liked post', postId);
-    return res.json({ success: true, data: { likes: post.likes, total: post.likes.length } });
+    console.log('[POST] /api/posts/:postId/like - User', userId, 'liked post', postId, 'new total:', savedPost.likes.length);
+    return res.json({ success: true, data: { likes: savedPost.likes, total: savedPost.likes.length } });
   } catch (err) {
     console.error('[POST] /api/posts/:postId/like error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
@@ -2027,6 +2032,8 @@ app.delete('/api/posts/:postId/like', async (req, res) => {
   try {
     const { postId } = req.params;
     const { userId } = req.body;
+    
+    console.log('[DELETE] /api/posts/:postId/like called - postId:', postId, 'userId:', userId);
     
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
@@ -2043,14 +2050,15 @@ app.delete('/api/posts/:postId/like', async (req, res) => {
     
     // Check if liked
     if (!post.likes.includes(userId)) {
+      console.log('[DELETE] /api/posts/:postId/like - Not liked');
       return res.status(400).json({ success: false, error: 'Not liked' });
     }
     
     post.likes = post.likes.filter(id => id !== userId);
-    await post.save();
+    const savedPost = await post.save();
     
-    console.log('[DELETE] /api/posts/:postId/like - User', userId, 'unliked post', postId);
-    return res.json({ success: true, data: { likes: post.likes, total: post.likes.length } });
+    console.log('[DELETE] /api/posts/:postId/like - User', userId, 'unliked post', postId, 'new total:', savedPost.likes.length);
+    return res.json({ success: true, data: { likes: savedPost.likes, total: savedPost.likes.length } });
   } catch (err) {
     console.error('[DELETE] /api/posts/:postId/like error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
