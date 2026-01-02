@@ -138,6 +138,44 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
+// GET /api/posts/feed - Get feed posts (MUST be before /:postId)
+app.get('/api/posts/feed', async (req, res) => {
+  try {
+    const posts = await mongoose.model('Post').find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate('userId', 'displayName name avatar profilePicture photoURL')
+      .catch(() => []);
+    res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
+  } catch (err) {
+    res.status(200).json({ success: true, data: [] });
+  }
+});
+console.log('  ✅ /api/posts/feed loaded');
+
+// GET /api/posts/location-count - Get location count (MUST be before /:postId)
+app.get('/api/posts/location-count', async (req, res) => {
+  try {
+    const Post = mongoose.model('Post');
+    const locations = await Post.aggregate([
+      { $match: { location: { $exists: true, $ne: null, $ne: '' } } },
+      { $group: { _id: '$location', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 20 }
+    ]).catch(() => []);
+    
+    return res.json({ 
+      success: true, 
+      hasData: locations && locations.length > 0,
+      data: locations || [] 
+    });
+  } catch (err) {
+    console.error('[GET] /api/posts/location-count error:', err.message);
+    return res.json({ success: true, hasData: false, data: [] });
+  }
+});
+console.log('  ✅ /api/posts/location-count loaded');
+
 // POST /api/posts - Create new post
 app.post('/api/posts', async (req, res) => {
   try {
@@ -1478,43 +1516,6 @@ app.get('/api/branding', (req, res) => {
 // } catch (err) {
 //   console.warn('  ⚠️ /api/posts routes error:', err.message);
 // }
-
-// Posts routes feed endpoint
-app.get('/api/posts/feed', async (req, res) => {
-  try {
-    const posts = await mongoose.model('Post').find()
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .populate('userId', 'displayName name avatar profilePicture photoURL')
-      .catch(() => []);
-    res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
-  } catch (err) {
-    res.status(200).json({ success: true, data: [] });
-  }
-});
-console.log('  ✅ /api/posts/feed loaded');
-
-// GET posts location count
-app.get('/api/posts/location-count', async (req, res) => {
-  try {
-    const Post = mongoose.model('Post');
-    const locations = await Post.aggregate([
-      { $group: { _id: '$location', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 20 }
-    ]).catch(() => []);
-    
-    return res.json({ 
-      success: true, 
-      hasData: locations && locations.length > 0,
-      data: locations || [] 
-    });
-  } catch (err) {
-    console.error('[GET] /api/posts/location-count error:', err.message);
-    return res.json({ success: true, hasData: false, data: [] });
-  }
-});
-console.log('  ✅ /api/posts/location-count loaded');
 
 // DISABLED TO DEBUG
 // try {
