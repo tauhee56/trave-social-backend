@@ -133,12 +133,27 @@ app.get('/api/posts', async (req, res) => {
       .populate('userId', 'displayName name avatar profilePicture photoURL')
       .catch(() => []);
     
-    console.log('🟢 [INLINE] /api/posts SUCCESS - returning', Array.isArray(posts) ? posts.length : 0, 'posts');
-    posts.forEach(p => {
-      console.log(`  Post: id=${p._id}, userId=${p.userId?._id}, isPrivate=${p.isPrivate}, category=${p.category}`);
+    // Ensure likesCount and commentCount are included
+    const enrichedPosts = posts.map(post => {
+      const postObj = post.toObject ? post.toObject() : post;
+      const likesArray = postObj.likes || [];
+      const commentsArray = postObj.comments || [];
+      
+      console.log(`  [POST] Before enrichment - id=${postObj._id}, likes type=${typeof likesArray}, likes=${JSON.stringify(likesArray).substring(0, 50)}`);
+      
+      return {
+        ...postObj,
+        likesCount: Array.isArray(likesArray) ? likesArray.length : (typeof likesArray === 'object' ? Object.keys(likesArray).length : 0),
+        commentCount: Array.isArray(commentsArray) ? commentsArray.length : (typeof commentsArray === 'object' ? Object.keys(commentsArray).length : 0)
+      };
     });
     
-    res.status(200).json({ success: true, data: Array.isArray(posts) ? posts : [] });
+    console.log('🟢 [INLINE] /api/posts SUCCESS - returning', enrichedPosts.length, 'posts');
+    enrichedPosts.slice(0, 3).forEach(p => {
+      console.log(`  Post: id=${p._id}, userId=${p.userId?._id}, likes=${p.likesCount}, comments=${p.commentCount}`);
+    });
+    
+    res.status(200).json({ success: true, data: enrichedPosts });
   } catch (err) {
     console.log('🟢 [INLINE] /api/posts ERROR:', err.message);
     res.status(200).json({ success: true, data: [] });
@@ -1808,6 +1823,20 @@ app.post('/api/posts/:postId/comments', async (req, res) => {
     };
     
     const result = await commentsCollection.insertOne(newComment);
+    
+    // Update post's commentCount
+    try {
+      const Post = mongoose.model('Post');
+      const post = await Post.findById(req.params.postId);
+      if (post) {
+        post.commentsCount = (post.commentsCount || 0) + 1;
+        post.commentCount = (post.commentCount || 0) + 1;
+        await post.save();
+        console.log('[POST] /api/posts/:postId/comments - Updated post commentCount to:', post.commentsCount);
+      }
+    } catch (err) {
+      console.log('[POST] /api/posts/:postId/comments - Could not update commentCount:', err.message);
+    }
     
     console.log('[POST] /api/posts/:postId/comments - Created comment:', result.insertedId);
     return res.status(201).json({ 
