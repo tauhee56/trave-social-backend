@@ -28,6 +28,17 @@ try { require('../models/Highlight'); } catch (e) { console.warn('⚠️ Highlig
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
+// ============= MULTER SETUP FOR FILE UPLOADS =============
+const multer = require('multer');
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit for videos
+});
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// ============= HELPER FUNCTIONS =============
 // Helper function to convert string to ObjectId (using mongoose.Types.ObjectId to avoid BSON version conflicts)
 const toObjectId = (id) => {
   if (typeof id === 'object' && (id instanceof mongoose.Types.ObjectId || id._bsontype === 'ObjectId')) return id;
@@ -38,9 +49,6 @@ const toObjectId = (id) => {
     return null;
   }
 };
-
-const app = express();
-const PORT = process.env.PORT || 5000;
 
 // ============= FIREBASE INITIALIZATION =============
 try {
@@ -664,21 +672,38 @@ console.log('✅ Critical inline routes registered: /api/posts, /api/categories,
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Trave Social Backend' }));
 app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' }));
 
-// Media upload endpoint
+// Media upload endpoint - with multer middleware for multipart/form-data
 app.post('/api/media/upload', async (req, res) => {
   try {
-    const { file, fileName, image, path } = req.body;
+    const { file: fileBase64, fileName, image, path } = req.body;
     
     // Support both { file, fileName } and { image, path } formats
-    const mediaFile = file || image;
+    let mediaFile = fileBase64 || image;
     const mediaName = fileName || path || 'media';
     
     console.log('[POST] /api/media/upload - Received request');
-    console.log('[POST] /api/media/upload - mediaFile exists:', !!mediaFile);
+    console.log('[POST] /api/media/upload - Content-Type:', req.headers['content-type']);
+    console.log('[POST] /api/media/upload - mediaFile (base64) length:', mediaFile?.length || 0);
     console.log('[POST] /api/media/upload - mediaName:', mediaName);
+    console.log('[POST] /api/media/upload - req.file exists:', !!req.file);
+    
+    // Support multipart/form-data with file upload
+    if (!mediaFile && req.file) {
+      // Convert buffer to base64 for Cloudinary
+      mediaFile = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+      console.log('[POST] /api/media/upload - Using req.file buffer, size:', req.file.size, 'bytes');
+    }
     
     if (!mediaFile) {
+      console.error('[POST] /api/media/upload - No file/image provided');
       return res.status(400).json({ success: false, error: 'No file/image provided' });
+    }
+
+    // Ensure data URI format for Cloudinary
+    if (!mediaFile.startsWith('data:')) {
+      // Add data URI prefix if not present
+      mediaFile = `data:image/jpeg;base64,${mediaFile}`;
+      console.log('[POST] /api/media/upload - Added data URI prefix');
     }
 
     // Upload to Cloudinary
@@ -703,7 +728,7 @@ app.post('/api/media/upload', async (req, res) => {
   } catch (err) {
     console.error('[POST] /api/media/upload - ❌ Error:', err.message);
     console.error('[POST] /api/media/upload - Stack:', err.stack);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: err.message || 'Upload failed' });
   }
 });
 console.log('  ✅ /api/media/upload loaded (with Cloudinary)');
