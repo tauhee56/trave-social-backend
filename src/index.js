@@ -835,26 +835,39 @@ app.get('/api/conversations', async (req, res) => {
   try {
     const userId = req.query.userId || req.headers['x-user-id'];
     
+    console.log('[GET] /api/conversations - Query userId:', userId);
+    
     // Return empty if no userId
     if (!userId) {
+      console.warn('[GET] /api/conversations - No userId provided');
       return res.json({ success: true, data: [] });
     }
     
     const db = mongoose.connection.db;
     
+    // Build query for conversations
+    const query = { 
+      $or: [
+        { userId1: userId }, 
+        { userId2: userId },
+        { participants: { $in: [userId] } }
+      ]
+    };
+    
+    console.log('[GET] /api/conversations - Query:', JSON.stringify(query));
+    
     // Query with index optimization
     const conversations = await db.collection('conversations')
-      .find({ 
-        $or: [
-          { userId1: userId }, 
-          { userId2: userId },
-          { participants: { $in: [userId] } }  // Fix: Query array elements with $in
-        ]
-      })
+      .find(query)
       .maxTimeMS(5000)  // 5 second timeout
       .sort({ updatedAt: -1 })
       .limit(50)
       .toArray();
+    
+    console.log('[GET] /api/conversations - Found', conversations.length, 'conversations');
+    conversations.forEach((c, i) => {
+      console.log(`  [${i}] participants:`, c.participants, '| lastMessage:', c.lastMessage?.substring(0, 30));
+    });
     
     res.json({ success: true, data: conversations || [] });
   } catch (err) {
@@ -910,6 +923,8 @@ console.log('  ✅ /api/messages loaded');
 app.post('/api/conversations/:conversationId/messages', async (req, res) => {
   try {
     const { senderId, text, recipientId } = req.body;
+    console.log('[POST] /api/conversations - Received:', { senderId, text: text.substring(0, 50), recipientId });
+    
     if (!senderId || !text) {
       return res.status(400).json({ success: false, error: 'senderId and text required' });
     }
@@ -927,10 +942,14 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
       participants = [senderId, recipientId];
     }
     
+    console.log('[POST] Extracted participants:', participants);
+    
     // Sort participants for consistent conversation ID
     if (participants.length === 2) {
       participants = [participants[0], participants[1]].sort();
     }
+    
+    console.log('[POST] Sorted participants:', participants);
     
     const newMessage = {
       conversationId: req.params.conversationId,
@@ -942,27 +961,44 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     };
     
     const result = await messagesCollection.insertOne(newMessage);
+    console.log('[POST] Message inserted:', result.insertedId);
     
     // Update or create conversation record
-    if (participants.length > 0) {
-      await conversationsCollection.updateOne(
+    if (participants.length === 2) {
+      console.log('[POST] Upserting conversation for:', participants);
+      
+      const updateResult = await conversationsCollection.updateOne(
         { participants: { $all: participants } },
         {
           $set: {
             lastMessage: text,
             lastMessageAt: new Date(),
-            participants: participants
+            participants: participants,
+            updatedAt: new Date()
           }
         },
         { upsert: true } // Create if doesn't exist
       );
-      console.log('[POST] /api/conversations/:conversationId/messages - Updated conversation for participants:', participants);
+      
+      console.log('[POST] Conversation upsert result:', { 
+        matched: updateResult.matchedCount, 
+        modified: updateResult.modifiedCount,
+        upserted: updateResult.upsertedId 
+      });
+      
+      // Verify it was created by querying it back
+      const verification = await conversationsCollection.findOne({ 
+        participants: { $all: participants } 
+      });
+      console.log('[POST] Verification - conversation exists:', !!verification);
+    } else {
+      console.warn('[POST] Could not extract participants, skipping conversation creation');
     }
     
-    console.log('[POST] /api/conversations/:conversationId/messages - Created:', result.insertedId);
     return res.status(201).json({ success: true, id: result.insertedId, data: newMessage });
   } catch (err) {
     console.error('[POST] /api/conversations/:conversationId/messages error:', err.message);
+    console.error('[POST] Error stack:', err.stack);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
