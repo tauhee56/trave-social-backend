@@ -26,31 +26,42 @@ try {
 // MUST BE BEFORE /:userId route to match correctly
 router.get('/search', async (req, res) => {
   try {
-    const { q, limit = 20 } = req.query;
-    
+    const { q, limit = 20, requesterUserId } = req.query;
+
     if (!q || q.trim().length === 0) {
       console.log('[GET /search] Empty query, returning empty results');
       return res.json({ success: true, data: [] });
     }
-    
+
     // Search by displayName, email, or bio
     const searchRegex = new RegExp(q.trim(), 'i');
-    
-    console.log('[GET /search] Searching for:', q, 'with limit:', limit);
-    
-    const users = await User.find({
+
+    console.log('[GET /search] Searching for:', q, 'requester:', requesterUserId);
+
+    // Build query to exclude current user
+    const searchQuery = {
       $or: [
         { displayName: searchRegex },
         { email: searchRegex },
         { bio: searchRegex }
       ]
-    })
+    };
+
+    // Exclude current user from search results
+    if (requesterUserId) {
+      searchQuery.$and = [
+        { _id: { $ne: mongoose.Types.ObjectId.isValid(requesterUserId) ? new mongoose.Types.ObjectId(requesterUserId) : null } },
+        { firebaseUid: { $ne: requesterUserId } }
+      ];
+    }
+
+    const users = await User.find(searchQuery)
       .limit(parseInt(limit) || 20)
-      .select('_id firebaseUid displayName avatar bio followers following')
+      .select('_id firebaseUid displayName avatar bio followers following isPrivate')
       .exec();
-    
-    console.log('[GET /search] Found', users.length, 'users');
-    
+
+    console.log('[GET /search] Found', users.length, 'users (excluding self)');
+
     res.json({ success: true, data: users });
   } catch (err) {
     console.error('[GET /search] Error:', err.message);

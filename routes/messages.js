@@ -3,20 +3,51 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Message model (define properly in models/Message.js in real use)
-const Message = mongoose.model('Message', new mongoose.Schema({
+const messageSchema = new mongoose.Schema({
   conversationId: String,
   senderId: String,
+  senderName: String,
+  senderAvatar: String,
   text: String,
+  imageUrl: String,
   createdAt: { type: Date, default: Date.now },
-  reactions: Object
-}));
+  reactions: Object,
+  editedAt: Date
+});
 
-// Get all messages for a conversation
+const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
+
+// Get all messages for a conversation with populated user data
 router.get('/conversations/:conversationId/messages', async (req, res) => {
   try {
-    const messages = await Message.find({ conversationId: req.params.conversationId }).sort({ createdAt: -1 });
-    res.json({ success: true, data: messages });
+    const messages = await Message.find({ conversationId: req.params.conversationId }).sort({ createdAt: 1 });
+
+    // Populate user data for each message
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection('users');
+
+    const enrichedMessages = await Promise.all(messages.map(async (message) => {
+      const messageObj = message.toObject ? message.toObject() : message;
+
+      // Find sender data
+      const sender = await usersCollection.findOne({
+        $or: [
+          { firebaseUid: message.senderId },
+          { uid: message.senderId },
+          { _id: mongoose.Types.ObjectId.isValid(message.senderId) ? new mongoose.Types.ObjectId(message.senderId) : null }
+        ]
+      });
+
+      return {
+        ...messageObj,
+        senderName: sender?.displayName || sender?.name || messageObj.senderName || 'User',
+        senderAvatar: sender?.avatar || sender?.photoURL || messageObj.senderAvatar || null
+      };
+    }));
+
+    res.json({ success: true, data: enrichedMessages });
   } catch (err) {
+    console.error('[GET /messages] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

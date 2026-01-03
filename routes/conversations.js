@@ -15,16 +15,51 @@ const conversationSchema = new mongoose.Schema({
 const Conversation = mongoose.models.Conversation || mongoose.model('Conversation', conversationSchema);
 console.log('📨 Conversation model loaded');
 
-// Get conversations for user (supports both query param and route param)
+// Get conversations for user with populated participant data
 router.get('/', async (req, res) => {
   try {
     const userId = req.query.userId;
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId query parameter required' });
     }
-    const conversations = await Conversation.find({ participants: userId });
-    res.json({ success: true, data: conversations || [] });
+
+    const conversations = await Conversation.find({ participants: userId }).sort({ lastMessageAt: -1 });
+
+    // Populate participant data
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection('users');
+
+    const enrichedConversations = await Promise.all(conversations.map(async (conversation) => {
+      const convObj = conversation.toObject ? conversation.toObject() : conversation;
+
+      // Get other participant (not current user)
+      const otherParticipantId = convObj.participants.find(p => p !== userId);
+
+      if (otherParticipantId) {
+        const otherUser = await usersCollection.findOne({
+          $or: [
+            { firebaseUid: otherParticipantId },
+            { uid: otherParticipantId },
+            { _id: mongoose.Types.ObjectId.isValid(otherParticipantId) ? new mongoose.Types.ObjectId(otherParticipantId) : null }
+          ]
+        });
+
+        return {
+          ...convObj,
+          otherParticipant: {
+            id: otherParticipantId,
+            name: otherUser?.displayName || otherUser?.name || 'User',
+            avatar: otherUser?.avatar || otherUser?.photoURL || null
+          }
+        };
+      }
+
+      return convObj;
+    }));
+
+    res.json({ success: true, data: enrichedConversations || [] });
   } catch (err) {
+    console.error('[GET /conversations] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -46,12 +81,47 @@ router.post('/get-or-create', async (req, res) => {
   }
 });
 
-// Get conversations for user (route param version)
+// Get conversations for user (route param version) with populated data
 router.get('/users/:userId', async (req, res) => {
   try {
-    const conversations = await Conversation.find({ participants: req.params.userId });
-    res.json({ success: true, data: conversations });
+    const userId = req.params.userId;
+    const conversations = await Conversation.find({ participants: userId }).sort({ lastMessageAt: -1 });
+
+    // Populate participant data
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection('users');
+
+    const enrichedConversations = await Promise.all(conversations.map(async (conversation) => {
+      const convObj = conversation.toObject ? conversation.toObject() : conversation;
+
+      // Get other participant (not current user)
+      const otherParticipantId = convObj.participants.find(p => p !== userId);
+
+      if (otherParticipantId) {
+        const otherUser = await usersCollection.findOne({
+          $or: [
+            { firebaseUid: otherParticipantId },
+            { uid: otherParticipantId },
+            { _id: mongoose.Types.ObjectId.isValid(otherParticipantId) ? new mongoose.Types.ObjectId(otherParticipantId) : null }
+          ]
+        });
+
+        return {
+          ...convObj,
+          otherParticipant: {
+            id: otherParticipantId,
+            name: otherUser?.displayName || otherUser?.name || 'User',
+            avatar: otherUser?.avatar || otherUser?.photoURL || null
+          }
+        };
+      }
+
+      return convObj;
+    }));
+
+    res.json({ success: true, data: enrichedConversations });
   } catch (err) {
+    console.error('[GET /conversations/users/:userId] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

@@ -26,6 +26,30 @@ router.post('/highlights', async (req, res) => {
   }
 });
 
+// Add a highlight for a specific user (POST /users/:userId/highlights)
+router.post('/users/:userId/highlights', async (req, res) => {
+  try {
+    const Highlight = getHighlight();
+    if (!Highlight) return res.status(500).json({ success: false, error: 'Highlight model not available' });
+    
+    const { title, coverImage, items } = req.body;
+    const userId = req.params.userId;
+    
+    // Create highlight with title and optional cover image
+    const highlight = new Highlight({ 
+      userId, 
+      title, 
+      coverImage: coverImage || null,
+      items: items || [] 
+    });
+    
+    await highlight.save();
+    res.status(201).json({ success: true, data: highlight });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Get all highlights for a user
 router.get('/users/:userId/highlights', async (req, res) => {
   try {
