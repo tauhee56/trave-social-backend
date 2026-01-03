@@ -1733,7 +1733,8 @@ app.get('/api/branding', (req, res) => {
     success: true,
     data: {
       appName: 'Trave Social',
-      logoUrl: null, // Add your logo URL here if you have one
+      logoUrl: 'https://res.cloudinary.com/dinwxxnzm/image/upload/v1766418070/logo/logo.png',
+      splashIcon: 'https://res.cloudinary.com/dinwxxnzm/image/upload/v1766418237/splash/splash-icon.png',
       primaryColor: '#007AFF',
       secondaryColor: '#5856D6'
     }
