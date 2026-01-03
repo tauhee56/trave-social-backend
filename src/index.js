@@ -1,5 +1,5 @@
 ﻿require('dotenv').config();
-// Deployed: 2026-01-03T02:20:00Z
+// CRITICAL DEPLOY: 2026-01-03T02:30:00Z - Conversation creation logic
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
