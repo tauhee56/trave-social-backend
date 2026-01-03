@@ -4,16 +4,8 @@ const mongoose = require('mongoose');
 
 console.log('📨 Loading conversations route...');
 
-// Conversation model (check if already exists)
-const conversationSchema = new mongoose.Schema({
-  participants: [String],
-  lastMessage: String,
-  lastMessageAt: { type: Date, default: Date.now },
-  createdAt: { type: Date, default: Date.now }
-});
-
-const Conversation = mongoose.models.Conversation || mongoose.model('Conversation', conversationSchema);
-console.log('📨 Conversation model loaded');
+// Get the Conversation model (already defined in models/Conversation.js and required in index.js)
+const Conversation = mongoose.model('Conversation');
 
 // Get conversations for user with populated participant data
 router.get('/', async (req, res) => {
@@ -64,18 +56,121 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get messages for a conversation
+router.get('/:id/messages', async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    
+    // Try to find by string ID first, then by MongoDB ObjectId
+    let convo = await Conversation.findOne({ 
+      $or: [
+        { conversationId: conversationId },
+        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+      ]
+    });
+    
+    if (!convo) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+    res.json({ success: true, messages: convo.messages || [] });
+  } catch (err) {
+    console.error('[GET] /:id/messages - Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Send a message in a conversation (POST /:id/messages)
+router.post('/:id/messages', async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    const { senderId, sender, text, recipientId, replyTo, read } = req.body;
+    
+    // Accept both senderId and sender for compatibility
+    const actualSenderId = senderId || sender;
+    if (!actualSenderId || !text) {
+      return res.status(400).json({ success: false, error: 'Missing senderId and/or text' });
+    }
+
+    // Try to find by string ID first, then by MongoDB ObjectId
+    let convo = await Conversation.findOne({ 
+      $or: [
+        { conversationId: conversationId },
+        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+      ]
+    });
+    
+    if (!convo) {
+      console.log('[POST] /:id/messages - Conversation not found, creating new one:', conversationId);
+      // Conversation doesn't exist yet, create it
+      const [user1, user2] = conversationId.split('_');
+      convo = new Conversation({ 
+        conversationId: conversationId,
+        participants: [user1, user2]
+      });
+    }
+    
+    // Initialize messages array if it doesn't exist
+    if (!convo.messages) {
+      convo.messages = [];
+    }
+    
+    const message = { 
+      senderId: actualSenderId, 
+      text,
+      read: read || false,
+      timestamp: new Date()
+    };
+    
+    // Add recipientId if provided
+    if (recipientId) {
+      message.recipientId = recipientId;
+    }
+    
+    // Add replyTo if replying to a message
+    if (replyTo) {
+      message.replyTo = replyTo;
+    }
+    
+    // Add an ID to the message for easier deletion/editing
+    message.id = new require('mongodb').ObjectId().toString();
+    
+    convo.messages.push(message);
+    convo.lastMessage = text;
+    convo.lastMessageAt = new Date();
+    convo.updatedAt = new Date();
+    await convo.save();
+    
+    console.log('[POST] /:id/messages - Message saved:', { conversationId, senderId: actualSenderId, text: text.substring(0, 50) });
+    res.json({ success: true, message });
+  } catch (err) {
+    console.error('[POST] /:id/messages - Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Get or create conversation
 router.post('/get-or-create', async (req, res) => {
   try {
     const { userId1, userId2 } = req.body;
+    const ids = [userId1, userId2].sort();
+    const conversationId = `${ids[0]}_${ids[1]}`;
+    
     let conversation = await Conversation.findOne({
-      participants: { $all: [userId1, userId2] }
+      $or: [
+        { conversationId: conversationId },
+        { participants: { $all: [userId1, userId2] } }
+      ]
     });
+    
     if (!conversation) {
-      conversation = new Conversation({ participants: [userId1, userId2] });
+      conversation = new Conversation({ 
+        conversationId: conversationId,
+        participants: [userId1, userId2] 
+      });
       await conversation.save();
     }
-    res.json({ success: true, id: conversation._id });
+    
+    res.json({ success: true, id: conversation._id, conversationId: conversationId });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

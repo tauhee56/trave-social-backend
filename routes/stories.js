@@ -132,7 +132,7 @@ router.delete('/:storyId', async (req, res) => {
   try {
     const { storyId } = req.params;
     const { userId } = req.body; // Expecting userId to verify ownership
-    
+
     if (!storyId) {
       return res.status(400).json({ success: false, error: 'storyId required' });
     }
@@ -151,8 +151,127 @@ router.delete('/:storyId', async (req, res) => {
     // Delete the story
     await Story.findByIdAndDelete(storyId);
 
+    console.log('[DELETE /stories/:storyId] Story deleted:', storyId);
     res.json({ success: true, message: 'Story deleted successfully' });
   } catch (err) {
+    console.error('[DELETE /stories/:storyId] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/stories/:storyId/like
+ * Like a story
+ */
+router.post('/:storyId/like', async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+
+    const story = await Story.findById(storyId);
+    if (!story) {
+      return res.status(404).json({ success: false, error: 'Story not found' });
+    }
+
+    // Initialize likes array if it doesn't exist
+    if (!story.likes) {
+      story.likes = [];
+    }
+
+    // Toggle like
+    const likeIndex = story.likes.indexOf(userId);
+    if (likeIndex > -1) {
+      // Unlike
+      story.likes.splice(likeIndex, 1);
+    } else {
+      // Like
+      story.likes.push(userId);
+    }
+
+    await story.save();
+
+    console.log('[POST /stories/:storyId/like] Story liked/unliked:', storyId, 'by:', userId);
+    res.json({ success: true, data: { likes: story.likes, likesCount: story.likes.length } });
+  } catch (err) {
+    console.error('[POST /stories/:storyId/like] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/stories/:storyId/comments
+ * Add a comment to a story
+ */
+router.post('/:storyId/comments', async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    const { userId, userName, text } = req.body;
+
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'userId and text required' });
+    }
+
+    const story = await Story.findById(storyId);
+    if (!story) {
+      return res.status(404).json({ success: false, error: 'Story not found' });
+    }
+
+    // Initialize comments array if it doesn't exist
+    if (!story.comments) {
+      story.comments = [];
+    }
+
+    // Fetch user data for comment
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection('users');
+    const user = await usersCollection.findOne({
+      $or: [
+        { firebaseUid: userId },
+        { uid: userId },
+        { _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }
+      ]
+    });
+
+    const comment = {
+      _id: new mongoose.Types.ObjectId(),
+      userId,
+      userName: user?.displayName || user?.name || userName || 'Anonymous',
+      userAvatar: user?.avatar || user?.photoURL || null,
+      text,
+      createdAt: new Date()
+    };
+
+    story.comments.push(comment);
+    await story.save();
+
+    console.log('[POST /stories/:storyId/comments] Comment added to story:', storyId);
+    res.status(201).json({ success: true, data: comment });
+  } catch (err) {
+    console.error('[POST /stories/:storyId/comments] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/stories/:storyId/comments
+ * Get comments for a story
+ */
+router.get('/:storyId/comments', async (req, res) => {
+  try {
+    const { storyId } = req.params;
+
+    const story = await Story.findById(storyId);
+    if (!story) {
+      return res.status(404).json({ success: false, error: 'Story not found' });
+    }
+
+    res.json({ success: true, data: story.comments || [] });
+  } catch (err) {
+    console.error('[GET /stories/:storyId/comments] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
