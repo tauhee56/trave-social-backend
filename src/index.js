@@ -1260,65 +1260,65 @@ app.post('/api/conversations/:conversationId/messages/:messageId/replies', async
 });
 console.log('  ✅ /api/conversations/:conversationId/messages/:messageId/replies (POST) loaded');
 
-// GET /api/stories - Get stories (placeholder, router will override)
-app.get('/api/stories', async (req, res) => {
-  try {
-    const db = mongoose.connection.db;
-    const stories = await db.collection('stories').find({ expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }).toArray();
-    res.json({ success: true, data: stories || [] });
-  } catch (err) {
-    res.json({ success: true, data: [] });
-  }
-});
-console.log('  ✅ /api/stories loaded');
+// GET /api/stories - DISABLED: Router-based stories routes handle this now
+// app.get('/api/stories', async (req, res) => {
+//   try {
+//     const db = mongoose.connection.db;
+//     const stories = await db.collection('stories').find({ expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }).toArray();
+//     res.json({ success: true, data: stories || [] });
+//   } catch (err) {
+//     res.json({ success: true, data: [] });
+//   }
+// });
+console.log('  ⚠️ /api/stories (inline) DISABLED - using router instead');
 
-// DELETE /api/stories/:storyId - Delete a story
-app.delete('/api/stories/:storyId', async (req, res) => {
-  try {
-    const { storyId } = req.params;
-    const { userId } = req.body;
-    
-    console.log(`🗑️ DELETE /api/stories/${storyId} called with userId:`, userId);
-    
-    if (!storyId) {
-      return res.status(400).json({ success: false, error: 'storyId required' });
-    }
-
-    const db = mongoose.connection.db;
-    const ObjectId = require('mongodb').ObjectId;
-    
-    // Find the story
-    let storyId_obj;
-    try {
-      storyId_obj = new ObjectId(storyId);
-    } catch (e) {
-      return res.status(400).json({ success: false, error: 'Invalid storyId format' });
-    }
-    
-    const story = await db.collection('stories').findOne({ _id: storyId_obj });
-    if (!story) {
-      return res.status(404).json({ success: false, error: 'Story not found' });
-    }
-
-    // Verify ownership (if userId provided)
-    if (userId && story.userId !== userId) {
-      return res.status(403).json({ success: false, error: 'Not authorized to delete this story' });
-    }
-
-    // Delete the story
-    const result = await db.collection('stories').deleteOne({ _id: storyId_obj });
-    
-    if (result.deletedCount > 0) {
-      res.json({ success: true, message: 'Story deleted successfully' });
-    } else {
-      res.status(500).json({ success: false, error: 'Failed to delete story' });
-    }
-  } catch (err) {
-    console.error('❌ DELETE /api/stories error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-console.log('  ✅ /api/stories/:storyId (DELETE) loaded');
+// DELETE /api/stories/:storyId - DISABLED: Router-based stories routes handle this now
+// app.delete('/api/stories/:storyId', async (req, res) => {
+//   try {
+//     const { storyId } = req.params;
+//     const { userId } = req.body;
+//
+//     console.log(`🗑️ DELETE /api/stories/${storyId} called with userId:`, userId);
+//
+//     if (!storyId) {
+//       return res.status(400).json({ success: false, error: 'storyId required' });
+//     }
+//
+//     const db = mongoose.connection.db;
+//     const ObjectId = require('mongodb').ObjectId;
+//
+//     // Find the story
+//     let storyId_obj;
+//     try {
+//       storyId_obj = new ObjectId(storyId);
+//     } catch (e) {
+//       return res.status(400).json({ success: false, error: 'Invalid storyId format' });
+//     }
+//
+//     const story = await db.collection('stories').findOne({ _id: storyId_obj });
+//     if (!story) {
+//       return res.status(404).json({ success: false, error: 'Story not found' });
+//     }
+//
+//     // Verify ownership (if userId provided)
+//     if (userId && story.userId !== userId) {
+//       return res.status(403).json({ success: false, error: 'Not authorized to delete this story' });
+//     }
+//
+//     // Delete the story
+//     const result = await db.collection('stories').deleteOne({ _id: storyId_obj });
+//
+//     if (result.deletedCount > 0) {
+//       res.json({ success: true, message: 'Story deleted successfully' });
+//     } else {
+//       res.status(500).json({ success: false, error: 'Failed to delete story' });
+//     }
+//   } catch (err) {
+//     console.error('❌ DELETE /api/stories error:', err);
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// });
+console.log('  ⚠️ /api/stories/:storyId (DELETE inline) DISABLED - using router instead');
 
 // GET /api/highlights - Get highlights (placeholder)
 app.get('/api/highlights', async (req, res) => {
