@@ -877,6 +877,43 @@ app.get('/api/conversations', async (req, res) => {
 });
 console.log('  ✅ /api/conversations loaded');
 
+// DEBUG ENDPOINT: GET /api/debug/conversations-count - Check conversation count
+app.get('/api/debug/conversations-count', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const count = await db.collection('conversations').countDocuments({});
+    const capitalizedCount = await db.collection('Conversation').countDocuments({}).catch(() => 0);
+    
+    const sample = await db.collection('conversations').find({}).limit(3).toArray();
+    
+    res.json({ 
+      success: true, 
+      'conversations (lowercase)': count,
+      'Conversation (capitalized)': capitalizedCount,
+      'sample documents': sample
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DEBUG ENDPOINT: GET /api/debug/messages-count - Check message count
+app.get('/api/debug/messages-count', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const count = await db.collection('messages').countDocuments({});
+    const sample = await db.collection('messages').find({}).sort({ createdAt: -1 }).limit(3).toArray();
+    
+    res.json({ 
+      success: true, 
+      'total messages': count,
+      'recent messages': sample.map(m => ({ ...m, text: m.text?.substring(0, 30) }))
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // DEBUG ENDPOINT: POST /api/test/create-conversation - Create test conversation
 app.post('/api/test/create-conversation', async (req, res) => {
   try {
