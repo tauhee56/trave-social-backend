@@ -1012,37 +1012,38 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     if (participants.length === 2) {
       console.log('[POST] Upserting conversation for:', participants);
       
-      // Use $in for the query to match conversations where user is a participant
-      const updateResult = await conversationsCollection.updateOne(
-        { participants: { $all: participants } },
-        {
-          $set: {
+      try {
+        // First, try to find if conversation exists
+        const existing = await conversationsCollection.findOne({
+          participants: { $all: participants }
+        });
+        
+        if (existing) {
+          // Update existing conversation
+          await conversationsCollection.updateOne(
+            { _id: existing._id },
+            {
+              $set: {
+                lastMessage: text,
+                lastMessageAt: new Date(),
+                updatedAt: new Date()
+              }
+            }
+          );
+          console.log('[POST] Updated existing conversation:', existing._id);
+        } else {
+          // Create new conversation
+          const insertResult = await conversationsCollection.insertOne({
+            participants: participants,
             lastMessage: text,
             lastMessageAt: new Date(),
+            createdAt: new Date(),
             updatedAt: new Date()
-          },
-          $setOnInsert: {
-            participants: participants,
-            createdAt: new Date()
-          }
-        },
-        { upsert: true } // Create if doesn't exist
-      );
-      
-      console.log('[POST] Conversation upsert result:', { 
-        matched: updateResult.matchedCount, 
-        modified: updateResult.modifiedCount,
-        upserted: updateResult.upsertedId 
-      });
-      
-      // Verify it was created by querying it back
-      const verification = await conversationsCollection.findOne({ 
-        participants: { $all: participants } 
-      });
-      console.log('[POST] Verification - conversation exists:', !!verification);
-      if (verification) {
-        console.log('[POST] Verification participants:', verification.participants);
-        console.log('[POST] Verification lastMessage:', verification.lastMessage?.substring(0, 50));
+          });
+          console.log('[POST] Created new conversation:', insertResult.insertedId);
+        }
+      } catch (convErr) {
+        console.error('[POST] Conversation creation error:', convErr.message);
       }
     } else {
       console.warn('[POST] Could not extract participants, skipping conversation creation');
