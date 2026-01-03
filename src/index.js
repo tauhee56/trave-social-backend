@@ -1019,10 +1019,10 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
           $set: {
             lastMessage: text,
             lastMessageAt: new Date(),
-            participants: participants,
             updatedAt: new Date()
           },
           $setOnInsert: {
+            participants: participants,
             createdAt: new Date()
           }
         },
