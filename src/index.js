@@ -1929,6 +1929,14 @@ try {
   console.warn('  ⚠️ /api/comments error:', err.message);
 }
 
+// Passport routes
+try {
+  app.use('/api', require('../routes/passport'));
+  console.log('  ✅ /api/passport loaded');
+} catch (err) {
+  console.warn('  ⚠️ /api/passport error:', err.message);
+}
+
 // Follow routes
 try {
   app.use('/api/follow', require('../routes/follow'));
