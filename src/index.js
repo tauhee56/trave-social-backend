@@ -909,13 +909,28 @@ console.log('  ✅ /api/messages loaded');
 // POST /api/conversations/:conversationId/messages - Send message
 app.post('/api/conversations/:conversationId/messages', async (req, res) => {
   try {
-    const { senderId, text } = req.body;
+    const { senderId, text, recipientId } = req.body;
     if (!senderId || !text) {
       return res.status(400).json({ success: false, error: 'senderId and text required' });
     }
     
     const db = mongoose.connection.db;
     const messagesCollection = db.collection('messages');
+    const conversationsCollection = db.collection('Conversation');
+    
+    // Extract participants from conversationId (format: userId1_userId2)
+    let participants = [];
+    if (req.params.conversationId.includes('_')) {
+      participants = req.params.conversationId.split('_');
+    } else if (recipientId && senderId) {
+      // If recipientId provided, use it
+      participants = [senderId, recipientId];
+    }
+    
+    // Sort participants for consistent conversation ID
+    if (participants.length === 2) {
+      participants = [participants[0], participants[1]].sort();
+    }
     
     const newMessage = {
       conversationId: req.params.conversationId,
@@ -927,6 +942,22 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     };
     
     const result = await messagesCollection.insertOne(newMessage);
+    
+    // Update or create conversation record
+    if (participants.length > 0) {
+      await conversationsCollection.updateOne(
+        { participants: { $all: participants } },
+        {
+          $set: {
+            lastMessage: text,
+            lastMessageAt: new Date(),
+            participants: participants
+          }
+        },
+        { upsert: true } // Create if doesn't exist
+      );
+      console.log('[POST] /api/conversations/:conversationId/messages - Updated conversation for participants:', participants);
+    }
     
     console.log('[POST] /api/conversations/:conversationId/messages - Created:', result.insertedId);
     return res.status(201).json({ success: true, id: result.insertedId, data: newMessage });
