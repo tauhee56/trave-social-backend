@@ -848,7 +848,7 @@ app.get('/api/conversations', async (req, res) => {
         $or: [
           { userId1: userId }, 
           { userId2: userId },
-          { participants: userId }
+          { participants: { $in: [userId] } }  // Fix: Query array elements with $in
         ]
       })
       .maxTimeMS(5000)  // 5 second timeout
@@ -916,7 +916,7 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     
     const db = mongoose.connection.db;
     const messagesCollection = db.collection('messages');
-    const conversationsCollection = db.collection('Conversation');
+    const conversationsCollection = db.collection('conversations'); // Use lowercase for consistency
     
     // Extract participants from conversationId (format: userId1_userId2)
     let participants = [];
