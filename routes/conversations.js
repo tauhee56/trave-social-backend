@@ -15,7 +15,14 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ success: false, error: 'userId query parameter required' });
     }
 
+    console.log('[GET] /conversations - Fetching for userId:', userId);
+
     const conversations = await Conversation.find({ participants: userId }).sort({ lastMessageAt: -1 });
+    
+    console.log('[GET] /conversations - Found', conversations.length, 'conversations for user:', userId);
+    conversations.forEach((c, i) => {
+      console.log(`  [${i}] conversationId: ${c.conversationId}, participants: ${c.participants}, messages: ${c.messages?.length || 0}`);
+    });
 
     // Populate participant data
     const db = mongoose.connection.db;
@@ -49,6 +56,7 @@ router.get('/', async (req, res) => {
       return convObj;
     }));
 
+    console.log('[GET] /conversations - Returning', enrichedConversations.length, 'enriched conversations');
     res.json({ success: true, data: enrichedConversations || [] });
   } catch (err) {
     console.error('[GET /conversations] Error:', err.message);
@@ -102,10 +110,22 @@ router.post('/:id/messages', async (req, res) => {
     if (!convo) {
       console.log('[POST] /:id/messages - Conversation not found, creating new one:', conversationId);
       // Conversation doesn't exist yet, create it
-      const [user1, user2] = conversationId.split('_');
+      // Use actual IDs from request body to avoid parsing issues with underscores in user IDs
+      const participants = [actualSenderId];
+      if (recipientId) {
+        participants.push(recipientId);
+      }
+      
+      if (participants.length < 2) {
+        console.error('[POST] ERROR: Cannot create conversation without 2 participants! Got:', participants);
+        return res.status(400).json({ success: false, error: 'Requires both senderId and recipientId' });
+      }
+      
+      console.log('[POST] Creating conversation with participants:', participants, 'senderId:', actualSenderId, 'recipientId:', recipientId);
+      
       convo = new Conversation({ 
         conversationId: conversationId,
-        participants: [user1, user2]
+        participants: participants.sort()
       });
     }
     
@@ -140,7 +160,14 @@ router.post('/:id/messages', async (req, res) => {
     convo.updatedAt = new Date();
     await convo.save();
     
-    console.log('[POST] /:id/messages - Message saved:', { conversationId, senderId: actualSenderId, text: text.substring(0, 50) });
+    console.log('[POST] /:id/messages - Message saved successfully!');
+    console.log('[POST] Conversation state after save:', {
+      conversationId: convo.conversationId,
+      participants: convo.participants,
+      messageCount: convo.messages?.length,
+      lastMessage: convo.lastMessage
+    });
+    
     res.json({ success: true, message });
   } catch (err) {
     console.error('[POST] /:id/messages - Error:', err.message);

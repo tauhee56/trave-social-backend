@@ -17,10 +17,43 @@ const Follow = mongoose.models.Follow || mongoose.model('Follow', followSchema);
 router.post('/', async (req, res) => {
   try {
     const { followerId, followingId } = req.body;
+
+    console.log('[POST /follow] followerId:', followerId, 'followingId:', followingId);
+
+    if (!followerId || !followingId) {
+      return res.status(400).json({ success: false, error: 'followerId and followingId required' });
+    }
+
+    // Check if already following
+    const existingFollow = await Follow.findOne({ followerId, followingId });
+    if (existingFollow) {
+      console.log('[POST /follow] Already following');
+      return res.json({ success: true, message: 'Already following' });
+    }
+
+    // Create follow relationship
     const follow = new Follow({ followerId, followingId });
     await follow.save();
+
+    // Update follower/following counts in User model
+    const User = mongoose.model('User');
+
+    // Increment following count for follower
+    await User.updateOne(
+      { $or: [{ firebaseUid: followerId }, { _id: mongoose.Types.ObjectId.isValid(followerId) ? new mongoose.Types.ObjectId(followerId) : null }] },
+      { $inc: { following: 1 } }
+    );
+
+    // Increment followers count for following user
+    await User.updateOne(
+      { $or: [{ firebaseUid: followingId }, { _id: mongoose.Types.ObjectId.isValid(followingId) ? new mongoose.Types.ObjectId(followingId) : null }] },
+      { $inc: { followers: 1 } }
+    );
+
+    console.log('[POST /follow] Follow relationship created and counts updated');
     res.json({ success: true });
   } catch (err) {
+    console.error('[POST /follow] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -29,9 +62,40 @@ router.post('/', async (req, res) => {
 router.delete('/', async (req, res) => {
   try {
     const { followerId, followingId } = req.body;
-    await Follow.deleteOne({ followerId, followingId });
+
+    console.log('[DELETE /follow] followerId:', followerId, 'followingId:', followingId);
+
+    if (!followerId || !followingId) {
+      return res.status(400).json({ success: false, error: 'followerId and followingId required' });
+    }
+
+    // Delete follow relationship
+    const result = await Follow.deleteOne({ followerId, followingId });
+
+    if (result.deletedCount === 0) {
+      console.log('[DELETE /follow] Follow relationship not found');
+      return res.json({ success: true, message: 'Not following' });
+    }
+
+    // Update follower/following counts in User model
+    const User = mongoose.model('User');
+
+    // Decrement following count for follower
+    await User.updateOne(
+      { $or: [{ firebaseUid: followerId }, { _id: mongoose.Types.ObjectId.isValid(followerId) ? new mongoose.Types.ObjectId(followerId) : null }] },
+      { $inc: { following: -1 } }
+    );
+
+    // Decrement followers count for following user
+    await User.updateOne(
+      { $or: [{ firebaseUid: followingId }, { _id: mongoose.Types.ObjectId.isValid(followingId) ? new mongoose.Types.ObjectId(followingId) : null }] },
+      { $inc: { followers: -1 } }
+    );
+
+    console.log('[DELETE /follow] Follow relationship deleted and counts updated');
     res.json({ success: true });
   } catch (err) {
+    console.error('[DELETE /follow] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

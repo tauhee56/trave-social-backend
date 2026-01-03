@@ -73,22 +73,66 @@ router.get('/search', async (req, res) => {
 router.get('/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    
+    const { requesterUserId } = req.query;
+
     let user = null;
-    
+
     // Try MongoDB ObjectId first
     if (mongoose.Types.ObjectId.isValid(userId)) {
       user = await User.findById(userId);
     }
-    
+
     // If not found, try searching by firebaseUid
     if (!user) {
       user = await User.findOne({ firebaseUid: userId });
     }
-    
-    // If user exists in database, return it
+
+    // If user exists in database
     if (user) {
-      res.json({ success: true, data: user });
+      const userObj = user.toObject();
+
+      // Check if profile is private
+      if (userObj.isPrivate && requesterUserId) {
+        const isSelf = userId === requesterUserId || userObj.firebaseUid === requesterUserId;
+
+        if (!isSelf) {
+          // Check if requester is following
+          const Follow = mongoose.model('Follow');
+          const isFollowing = await Follow.findOne({
+            followerId: requesterUserId,
+            followingId: userObj.firebaseUid || userId
+          });
+
+          if (!isFollowing) {
+            // Return limited profile info for private accounts
+            return res.json({
+              success: true,
+              data: {
+                _id: userObj._id,
+                firebaseUid: userObj.firebaseUid,
+                displayName: userObj.displayName || 'User',
+                username: userObj.username,
+                avatar: userObj.avatar,
+                isPrivate: true,
+                followers: userObj.followers || 0,
+                following: userObj.following || 0,
+                // Hide sensitive info
+                bio: null,
+                email: null,
+                website: null,
+                location: null,
+                phone: null,
+                interests: null
+              },
+              isPrivate: true,
+              hasAccess: false
+            });
+          }
+        }
+      }
+
+      // Return full profile if not private or has access
+      res.json({ success: true, data: userObj, isPrivate: userObj.isPrivate || false, hasAccess: true });
     } else {
       // Return placeholder if not in database
       res.json({
@@ -109,6 +153,7 @@ router.get('/:userId', async (req, res) => {
       });
     }
   } catch (err) {
+    console.error('[GET /users/:userId] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

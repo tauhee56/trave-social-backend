@@ -1,7 +1,8 @@
 // models/Conversation.js
 const mongoose = require('mongoose');
 const ConversationSchema = new mongoose.Schema({
-  participants: [String], // user IDs
+  conversationId: { type: String, unique: true, sparse: true, index: true }, // String ID like "user1_user2"
+  participants: { type: [String], index: true }, // user IDs - indexed for fast queries
   messages: [{
     id: String,
     senderId: String,
