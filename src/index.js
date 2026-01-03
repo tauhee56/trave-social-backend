@@ -857,6 +857,13 @@ app.get('/api/conversations', async (req, res) => {
     
     console.log('[GET] /api/conversations - Query:', JSON.stringify(query));
     
+    // First, let's log ALL conversations in the database for debugging
+    const allConversations = await db.collection('conversations').find({}).limit(5).toArray();
+    console.log('[GET] Total conversations in DB:', allConversations.length);
+    allConversations.forEach((conv, i) => {
+      console.log(`  [${i}] participants:`, conv.participants, '| user in participants?', conv.participants?.includes(userId));
+    });
+    
     // Query with index optimization
     const conversations = await db.collection('conversations')
       .find(query)
@@ -1005,6 +1012,7 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     if (participants.length === 2) {
       console.log('[POST] Upserting conversation for:', participants);
       
+      // Use $in for the query to match conversations where user is a participant
       const updateResult = await conversationsCollection.updateOne(
         { participants: { $all: participants } },
         {
@@ -1013,6 +1021,9 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
             lastMessageAt: new Date(),
             participants: participants,
             updatedAt: new Date()
+          },
+          $setOnInsert: {
+            createdAt: new Date()
           }
         },
         { upsert: true } // Create if doesn't exist
@@ -1029,6 +1040,10 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
         participants: { $all: participants } 
       });
       console.log('[POST] Verification - conversation exists:', !!verification);
+      if (verification) {
+        console.log('[POST] Verification participants:', verification.participants);
+        console.log('[POST] Verification lastMessage:', verification.lastMessage?.substring(0, 50));
+      }
     } else {
       console.warn('[POST] Could not extract participants, skipping conversation creation');
     }
