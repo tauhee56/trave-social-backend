@@ -877,7 +877,13 @@ app.get('/api/conversations', async (req, res) => {
       console.log(`  [${i}] participants:`, c.participants, '| lastMessage:', c.lastMessage?.substring(0, 30));
     });
     
-    res.json({ success: true, data: conversations || [] });
+    // Add currentUserId to each conversation for frontend compatibility
+    const conversationsWithUserId = conversations.map(conv => ({
+      ...conv,
+      currentUserId: userId
+    }));
+    
+    res.json({ success: true, data: conversationsWithUserId || [] });
   } catch (err) {
     console.error('[GET] /api/conversations - Error:', err.message);
     res.json({ success: true, data: [] });
