@@ -1048,6 +1048,7 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
       console.warn('[POST] Could not extract participants, skipping conversation creation');
     }
     
+    res.set('X-Backend-Version', '2026-01-03T02:35:00Z-CONVERSATION-CREATION');
     return res.status(201).json({ success: true, id: result.insertedId, data: newMessage });
   } catch (err) {
     console.error('[POST] /api/conversations/:conversationId/messages error:', err.message);
