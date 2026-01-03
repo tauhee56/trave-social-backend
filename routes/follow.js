@@ -100,6 +100,43 @@ router.delete('/', async (req, res) => {
   }
 });
 
+// Check if user is following another user (GET /api/follow/status?followerId=X&followingId=Y)
+router.get('/status', async (req, res) => {
+  try {
+    const { followerId, followingId } = req.query;
+
+    if (!followerId || !followingId) {
+      return res.status(400).json({ success: false, error: 'followerId and followingId required' });
+    }
+
+    const follow = await Follow.findOne({ followerId, followingId });
+    res.json({ success: true, isFollowing: !!follow });
+  } catch (err) {
+    console.error('[GET /follow/status] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Check if user is following another user (GET /api/follow/status?followerId=X&followingId=Y)
+router.get('/status', async (req, res) => {
+  try {
+    const { followerId, followingId } = req.query;
+
+    console.log('[GET /follow/status] followerId:', followerId, 'followingId:', followingId);
+
+    if (!followerId || !followingId) {
+      return res.status(400).json({ success: false, error: 'followerId and followingId required' });
+    }
+
+    const follow = await Follow.findOne({ followerId, followingId });
+    console.log('[GET /follow/status] Follow found:', !!follow);
+    res.json({ success: true, isFollowing: !!follow });
+  } catch (err) {
+    console.error('[GET /follow/status] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Get followers of a user
 router.get('/users/:userId/followers', async (req, res) => {
   try {

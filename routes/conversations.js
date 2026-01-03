@@ -152,7 +152,7 @@ router.post('/:id/messages', async (req, res) => {
     }
     
     // Add an ID to the message for easier deletion/editing
-    message.id = new require('mongodb').ObjectId().toString();
+    message.id = new mongoose.Types.ObjectId().toString();
     
     convo.messages.push(message);
     convo.lastMessage = text;

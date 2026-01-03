@@ -971,6 +971,10 @@ app.get('/api/messages', async (req, res) => {
 console.log('  ✅ /api/messages loaded');
 
 // POST /api/conversations/:conversationId/messages - Send message
+// DISABLED: This inline handler was intercepting before the conversations router
+// The conversations router (routes/conversations.js) has the proper implementation
+// that saves messages to the Conversation.messages array
+/*
 app.post('/api/conversations/:conversationId/messages', async (req, res) => {
   try {
     const { senderId, text, recipientId } = req.body;
@@ -982,20 +986,17 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     
     const db = mongoose.connection.db;
     const messagesCollection = db.collection('messages');
-    const conversationsCollection = db.collection('conversations'); // Use lowercase for consistency
+    const conversationsCollection = db.collection('conversations');
     
-    // Extract participants from conversationId (format: userId1_userId2)
     let participants = [];
     if (req.params.conversationId.includes('_')) {
       participants = req.params.conversationId.split('_');
     } else if (recipientId && senderId) {
-      // If recipientId provided, use it
       participants = [senderId, recipientId];
     }
     
     console.log('[POST] Extracted participants:', participants);
     
-    // Sort participants for consistent conversation ID
     if (participants.length === 2) {
       participants = [participants[0], participants[1]].sort();
     }
@@ -1014,18 +1015,15 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     const result = await messagesCollection.insertOne(newMessage);
     console.log('[POST] Message inserted:', result.insertedId);
     
-    // Update or create conversation record
     if (participants.length === 2) {
       console.log('[POST] Upserting conversation for:', participants);
       
       try {
-        // First, try to find if conversation exists
         const existing = await conversationsCollection.findOne({
           participants: { $all: participants }
         });
         
         if (existing) {
-          // Update existing conversation
           await conversationsCollection.updateOne(
             { _id: existing._id },
             {
@@ -1038,7 +1036,6 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
           );
           console.log('[POST] Updated existing conversation:', existing._id);
         } else {
-          // Create new conversation
           const insertResult = await conversationsCollection.insertOne({
             participants: participants,
             lastMessage: text,
@@ -1062,8 +1059,11 @@ app.post('/api/conversations/:conversationId/messages', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-console.log('  ✅ /api/conversations/:conversationId/messages (POST) loaded');
+*/
+console.log('  ⏭️ /api/conversations/:conversationId/messages (POST) - Using router instead');
 
+// DISABLED: Using the conversations router GET handler instead
+/*
 // GET /api/conversations/:conversationId/messages - Get messages in conversation
 app.get('/api/conversations/:conversationId/messages', async (req, res) => {
   try {
@@ -1082,7 +1082,8 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-console.log('  ✅ /api/conversations/:conversationId/messages (GET) loaded');
+*/
+console.log('  ⏭️ /api/conversations/:conversationId/messages (GET) - Using router instead');
 
 // GET /api/conversations/:conversationId/messages/:messageId - Get single message
 app.get('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
