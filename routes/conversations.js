@@ -248,4 +248,191 @@ router.get('/users/:userId', async (req, res) => {
   }
 });
 
+// PATCH /:conversationId/messages/:messageId - Edit message
+router.patch('/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const { userId, text } = req.body;
+    const { conversationId, messageId } = req.params;
+
+    console.log('[PATCH] /:conversationId/messages/:messageId - Request:', {
+      conversationId,
+      messageId,
+      userId,
+      text: text?.substring(0, 30)
+    });
+
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'userId and text required' });
+    }
+
+    // Find conversation
+    const conversation = await Conversation.findOne({
+      $or: [
+        { conversationId: conversationId },
+        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+      ]
+    });
+
+    if (!conversation) {
+      console.log('[PATCH] Conversation not found:', conversationId);
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    // Find message in conversation.messages array
+    const message = conversation.messages?.find(m => m.id === messageId);
+    if (!message) {
+      console.log('[PATCH] Message not found in conversation:', messageId);
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+
+    // Check authorization
+    if (message.senderId !== userId) {
+      console.log('[PATCH] Unauthorized - senderId:', message.senderId, 'userId:', userId);
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only edit your own messages' });
+    }
+
+    // Update message
+    message.text = text;
+    message.editedAt = new Date();
+    await conversation.save();
+
+    console.log('[PATCH] Message updated:', messageId);
+    res.json({ success: true, data: message });
+  } catch (err) {
+    console.error('[PATCH] /:conversationId/messages/:messageId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /:conversationId/messages/:messageId - Delete message
+router.delete('/:conversationId/messages/:messageId', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { conversationId, messageId } = req.params;
+
+    console.log('[DELETE] /:conversationId/messages/:messageId - Request:', {
+      conversationId,
+      messageId,
+      userId
+    });
+
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+
+    // Find conversation
+    const conversation = await Conversation.findOne({
+      $or: [
+        { conversationId: conversationId },
+        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+      ]
+    });
+
+    if (!conversation) {
+      console.log('[DELETE] Conversation not found:', conversationId);
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    // Find message in conversation.messages array
+    const message = conversation.messages?.find(m => m.id === messageId);
+    if (!message) {
+      console.log('[DELETE] Message not found in conversation:', messageId);
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+
+    // Check authorization
+    if (message.senderId !== userId) {
+      console.log('[DELETE] Unauthorized - senderId:', message.senderId, 'userId:', userId);
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own messages' });
+    }
+
+    // Remove message from array
+    conversation.messages = conversation.messages.filter(m => m.id !== messageId);
+    await conversation.save();
+
+    console.log('[DELETE] Message deleted:', messageId);
+    res.json({ success: true, message: 'Message deleted' });
+  } catch (err) {
+    console.error('[DELETE] /:conversationId/messages/:messageId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /:conversationId/messages/:messageId/reactions - React to message
+router.post('/:conversationId/messages/:messageId/reactions', async (req, res) => {
+  try {
+    const { userId, reaction, emoji } = req.body;
+    const { conversationId, messageId } = req.params;
+
+    // Accept both 'reaction' and 'emoji' for compatibility
+    const actualReaction = reaction || emoji;
+
+    console.log('[POST] /:conversationId/messages/:messageId/reactions - Request:', {
+      conversationId,
+      messageId,
+      userId,
+      reaction: actualReaction
+    });
+
+    if (!userId || !actualReaction) {
+      return res.status(400).json({ success: false, error: 'userId and reaction/emoji required' });
+    }
+
+    // Find conversation
+    const conversation = await Conversation.findOne({
+      $or: [
+        { conversationId: conversationId },
+        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+      ]
+    });
+
+    if (!conversation) {
+      console.log('[POST] Conversation not found:', conversationId);
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    // Find message in conversation.messages array
+    const message = conversation.messages?.find(m => m.id === messageId);
+    if (!message) {
+      console.log('[POST] Message not found in conversation:', messageId);
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+
+    // Initialize reactions object if not exists
+    if (!message.reactions) {
+      message.reactions = {};
+    }
+
+    // Initialize reaction array if not exists
+    if (!message.reactions[actualReaction]) {
+      message.reactions[actualReaction] = [];
+    }
+
+    // Toggle reaction (Instagram style - add if not present, remove if present)
+    const userIndex = message.reactions[actualReaction].indexOf(userId);
+    if (userIndex === -1) {
+      message.reactions[actualReaction].push(userId);
+      console.log('[POST] Added reaction:', actualReaction, 'from user:', userId);
+    } else {
+      message.reactions[actualReaction].splice(userIndex, 1);
+      console.log('[POST] Removed reaction:', actualReaction, 'from user:', userId);
+
+      // Remove empty reaction arrays
+      if (message.reactions[actualReaction].length === 0) {
+        delete message.reactions[actualReaction];
+      }
+    }
+
+    // Mark as modified for Mongoose
+    conversation.markModified('messages');
+    await conversation.save();
+
+    console.log('[POST] Reactions updated for message:', messageId);
+    res.json({ success: true, data: { reactions: message.reactions } });
+  } catch (err) {
+    console.error('[POST] /:conversationId/messages/:messageId/reactions error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

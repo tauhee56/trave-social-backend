@@ -1139,29 +1139,56 @@ app.patch('/api/conversations/:conversationId/messages/:messageId', async (req, 
   try {
     const { userId, text } = req.body;
     const { conversationId, messageId } = req.params;
-    
+
+    console.log('[PATCH] /api/conversations/:conversationId/messages/:messageId - Request:', {
+      conversationId,
+      messageId,
+      userId,
+      text: text?.substring(0, 30)
+    });
+
     if (!userId || !text) {
       return res.status(400).json({ success: false, error: 'userId and text required' });
     }
-    
+
     const db = mongoose.connection.db;
-    const messagesCollection = db.collection('messages');
-    
-    const message = await messagesCollection.findOne({ _id: toObjectId(messageId) });
+    const conversationsCollection = db.collection('conversations');
+
+    // Find conversation by conversationId string (not _id)
+    const conversation = await conversationsCollection.findOne({
+      conversationId: conversationId
+    });
+
+    if (!conversation) {
+      console.log('[PATCH] Conversation not found:', conversationId);
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    // Find message in conversation.messages array
+    const message = conversation.messages?.find(m => m.id === messageId);
     if (!message) {
+      console.log('[PATCH] Message not found in conversation:', messageId);
       return res.status(404).json({ success: false, error: 'Message not found' });
     }
-    
+
+    // Check authorization
     if (message.senderId !== userId) {
+      console.log('[PATCH] Unauthorized - senderId:', message.senderId, 'userId:', userId);
       return res.status(403).json({ success: false, error: 'Unauthorized - you can only edit your own messages' });
     }
-    
-    const updated = await messagesCollection.findOneAndUpdate(
-      { _id: toObjectId(messageId) },
-      { $set: { text, editedAt: new Date() } },
+
+    // Update message in array
+    const updated = await conversationsCollection.findOneAndUpdate(
+      { conversationId: conversationId, 'messages.id': messageId },
+      {
+        $set: {
+          'messages.$.text': text,
+          'messages.$.editedAt': new Date()
+        }
+      },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[PATCH] /api/conversations/:conversationId/messages/:messageId - Updated:', messageId);
     res.json({ success: true, data: updated.value });
   } catch (err) {
@@ -1175,26 +1202,50 @@ console.log('  ✅ /api/conversations/:conversationId/messages/:messageId (PATCH
 app.delete('/api/conversations/:conversationId/messages/:messageId', async (req, res) => {
   try {
     const { userId } = req.body;
-    const { messageId } = req.params;
-    
+    const { conversationId, messageId } = req.params;
+
+    console.log('[DELETE] /api/conversations/:conversationId/messages/:messageId - Request:', {
+      conversationId,
+      messageId,
+      userId
+    });
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
+
     const db = mongoose.connection.db;
-    const messagesCollection = db.collection('messages');
-    
-    const message = await messagesCollection.findOne({ _id: toObjectId(messageId) });
+    const conversationsCollection = db.collection('conversations');
+
+    // Find conversation by conversationId string (not _id)
+    const conversation = await conversationsCollection.findOne({
+      conversationId: conversationId
+    });
+
+    if (!conversation) {
+      console.log('[DELETE] Conversation not found:', conversationId);
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    // Find message in conversation.messages array
+    const message = conversation.messages?.find(m => m.id === messageId);
     if (!message) {
+      console.log('[DELETE] Message not found in conversation:', messageId);
       return res.status(404).json({ success: false, error: 'Message not found' });
     }
-    
+
+    // Check authorization
     if (message.senderId !== userId) {
+      console.log('[DELETE] Unauthorized - senderId:', message.senderId, 'userId:', userId);
       return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own messages' });
     }
-    
-    await messagesCollection.deleteOne({ _id: toObjectId(messageId) });
-    
+
+    // Remove message from array
+    await conversationsCollection.updateOne(
+      { conversationId: conversationId },
+      { $pull: { messages: { id: messageId } } }
+    );
+
     console.log('[DELETE] /api/conversations/:conversationId/messages/:messageId - Deleted:', messageId);
     res.json({ success: true, message: 'Message deleted' });
   } catch (err) {
@@ -1207,36 +1258,75 @@ console.log('  ✅ /api/conversations/:conversationId/messages/:messageId (DELET
 // POST /api/conversations/:conversationId/messages/:messageId/reactions - React to message
 app.post('/api/conversations/:conversationId/messages/:messageId/reactions', async (req, res) => {
   try {
-    const { userId, reaction } = req.body;
-    const { messageId } = req.params;
-    
-    if (!userId || !reaction) {
-      return res.status(400).json({ success: false, error: 'userId and reaction required' });
+    const { userId, reaction, emoji } = req.body;
+    const { conversationId, messageId } = req.params;
+
+    // Accept both 'reaction' and 'emoji' for compatibility
+    const actualReaction = reaction || emoji;
+
+    console.log('[POST] /api/conversations/:conversationId/messages/:messageId/reactions - Request:', {
+      conversationId,
+      messageId,
+      userId,
+      reaction: actualReaction
+    });
+
+    if (!userId || !actualReaction) {
+      return res.status(400).json({ success: false, error: 'userId and reaction/emoji required' });
     }
-    
+
     const db = mongoose.connection.db;
-    const messagesCollection = db.collection('messages');
-    
-    const message = await messagesCollection.findOne({ _id: toObjectId(messageId) });
-    if (!message) {
+    const conversationsCollection = db.collection('conversations');
+
+    // Find conversation by conversationId string (not _id)
+    const conversation = await conversationsCollection.findOne({
+      conversationId: conversationId
+    });
+
+    if (!conversation) {
+      console.log('[POST] Conversation not found:', conversationId);
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    // Find message in conversation.messages array
+    const messageIndex = conversation.messages?.findIndex(m => m.id === messageId);
+    if (messageIndex === -1 || messageIndex === undefined) {
+      console.log('[POST] Message not found in conversation:', messageId);
       return res.status(404).json({ success: false, error: 'Message not found' });
     }
-    
+
+    const message = conversation.messages[messageIndex];
     const reactions = message.reactions || {};
-    reactions[reaction] = reactions[reaction] || [];
-    
-    if (!reactions[reaction].includes(userId)) {
-      reactions[reaction].push(userId);
+
+    // Initialize reaction array if not exists
+    if (!reactions[actualReaction]) {
+      reactions[actualReaction] = [];
     }
-    
-    const updated = await messagesCollection.findOneAndUpdate(
-      { _id: toObjectId(messageId) },
-      { $set: { reactions } },
+
+    // Toggle reaction (Instagram style - add if not present, remove if present)
+    const userIndex = reactions[actualReaction].indexOf(userId);
+    if (userIndex === -1) {
+      reactions[actualReaction].push(userId);
+      console.log('[POST] Added reaction:', actualReaction, 'from user:', userId);
+    } else {
+      reactions[actualReaction].splice(userIndex, 1);
+      console.log('[POST] Removed reaction:', actualReaction, 'from user:', userId);
+
+      // Remove empty reaction arrays
+      if (reactions[actualReaction].length === 0) {
+        delete reactions[actualReaction];
+      }
+    }
+
+    // Update message reactions in array
+    const updated = await conversationsCollection.findOneAndUpdate(
+      { conversationId: conversationId, 'messages.id': messageId },
+      { $set: { 'messages.$.reactions': reactions } },
       { returnDocument: 'after' }
     );
-    
-    console.log('[POST] /api/conversations/:conversationId/messages/:messageId/reactions - User', userId, 'reacted:', reaction);
-    res.json({ success: true, data: { reactions: updated.value.reactions } });
+
+    console.log('[POST] /api/conversations/:conversationId/messages/:messageId/reactions - Updated reactions');
+    res.json({ success: true, data: { reactions } });
   } catch (err) {
     console.error('[POST] /api/conversations/:conversationId/messages/:messageId/reactions error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
