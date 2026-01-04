@@ -1,12 +1,14 @@
 ﻿require('dotenv').config();
 // CRITICAL DEPLOY: 2026-01-03T02:30:00Z - Conversation creation logic
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const admin = require('firebase-admin');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
+const { Server } = require('socket.io');
 
 // Configure Cloudinary
 cloudinary.config({
@@ -37,7 +39,22 @@ const upload = multer({
 });
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
+
+// ============= SOCKET.IO SETUP =============
+const io = new Server(server, {
+  cors: {
+    origin: '*', // Allow all origins for development (restrict in production)
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'], // Support both transports
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+console.log('✅ Socket.IO server initialized');
 
 // ============= HELPER FUNCTIONS =============
 // Helper function to convert string to ObjectId (using mongoose.Types.ObjectId to avoid BSON version conflicts)
@@ -122,6 +139,16 @@ try {
 
 // Then load inline routes
 console.log('🔧 Loading critical inline GET routes...');
+
+// Health check endpoint for monitoring and cold start detection
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
 
 app.get('/api/posts', async (req, res) => {
   console.log('🟢 [INLINE] GET /api/posts CALLED with query:', req.query);
@@ -2641,17 +2668,156 @@ app.use((err, req, res, next) => {
 });
 
 console.log('✅ Error handler registered');
+
+// ============= SOCKET.IO EVENT HANDLERS =============
+// Store connected users: { userId: socketId }
+const connectedUsers = new Map();
+
+io.on('connection', (socket) => {
+  console.log('🔌 Socket connected:', socket.id);
+
+  // User joins with their userId
+  socket.on('join', (userId) => {
+    if (userId) {
+      connectedUsers.set(userId, socket.id);
+      socket.userId = userId;
+      console.log(`👤 User ${userId} joined with socket ${socket.id}`);
+
+      // Notify user they're connected
+      socket.emit('connected', { userId, socketId: socket.id });
+    }
+  });
+
+  // Send message event
+  socket.on('sendMessage', async (data) => {
+    try {
+      const { conversationId, senderId, recipientId, text, timestamp } = data;
+      console.log('📨 Message received:', { conversationId, senderId, recipientId, text: text?.substring(0, 30) });
+
+      // Save message to database
+      const Conversation = mongoose.model('Conversation');
+      const convo = await Conversation.findOne({
+        $or: [
+          { conversationId: conversationId },
+          { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+        ]
+      });
+
+      if (convo) {
+        const message = {
+          id: new mongoose.Types.ObjectId().toString(),
+          senderId,
+          recipientId,
+          text,
+          timestamp: timestamp || new Date(),
+          read: false,
+          delivered: false
+        };
+
+        convo.messages.push(message);
+        convo.lastMessage = text;
+        convo.lastMessageAt = new Date();
+        await convo.save();
+
+        // Emit to sender (confirmation)
+        socket.emit('messageSent', { ...message, conversationId });
+
+        // Emit to recipient if online
+        const recipientSocketId = connectedUsers.get(recipientId);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('newMessage', { ...message, conversationId });
+
+          // Mark as delivered
+          message.delivered = true;
+          await convo.save();
+
+          // Notify sender of delivery
+          socket.emit('messageDelivered', { messageId: message.id, conversationId });
+        }
+
+        console.log('✅ Message saved and emitted');
+      }
+    } catch (error) {
+      console.error('❌ Error handling sendMessage:', error);
+      socket.emit('messageError', { error: error.message });
+    }
+  });
+
+  // Mark message as read
+  socket.on('markAsRead', async (data) => {
+    try {
+      const { conversationId, messageId, userId } = data;
+      console.log('👁️ Mark as read:', { conversationId, messageId, userId });
+
+      const Conversation = mongoose.model('Conversation');
+      const convo = await Conversation.findOne({
+        $or: [
+          { conversationId: conversationId },
+          { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+        ]
+      });
+
+      if (convo) {
+        const message = convo.messages.find(m => m.id === messageId);
+        if (message && message.recipientId === userId) {
+          message.read = true;
+          await convo.save();
+
+          // Notify sender
+          const senderSocketId = connectedUsers.get(message.senderId);
+          if (senderSocketId) {
+            io.to(senderSocketId).emit('messageRead', { messageId, conversationId });
+          }
+
+          console.log('✅ Message marked as read');
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error marking message as read:', error);
+    }
+  });
+
+  // User typing indicator
+  socket.on('typing', (data) => {
+    const { conversationId, userId, recipientId } = data;
+    const recipientSocketId = connectedUsers.get(recipientId);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit('userTyping', { conversationId, userId });
+    }
+  });
+
+  socket.on('stopTyping', (data) => {
+    const { conversationId, userId, recipientId } = data;
+    const recipientSocketId = connectedUsers.get(recipientId);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit('userStoppedTyping', { conversationId, userId });
+    }
+  });
+
+  // Disconnect
+  socket.on('disconnect', () => {
+    if (socket.userId) {
+      connectedUsers.delete(socket.userId);
+      console.log(`👋 User ${socket.userId} disconnected`);
+    }
+    console.log('🔌 Socket disconnected:', socket.id);
+  });
+});
+
+console.log('✅ Socket.IO event handlers registered');
+
 console.log('🚀 STARTING SERVER - PORT:', PORT, typeof PORT);
 console.log('🚀 STARTING SERVER - Type of PORT:', typeof PORT);
 
 // ============= START SERVER =============
 try {
-  const server = app.listen(parseInt(PORT) || 5000, '0.0.0.0', () => {
+  server.listen(parseInt(PORT) || 5000, '0.0.0.0', () => {
     console.log(`✅ Backend running on port ${PORT}`);
     console.log(`   API: http://localhost:${PORT}/api`);
+    console.log(`   Socket.IO: ws://localhost:${PORT}`);
     console.log('🎉 SERVER LISTENING - READY FOR CONNECTIONS');
   });
-  
+
   server.on('error', (err) => {
     console.error('❌ Server error:', err.message);
   });

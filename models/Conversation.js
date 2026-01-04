@@ -19,6 +19,7 @@ const ConversationSchema = new mongoose.Schema({
       of: String
     },
     read: { type: Boolean, default: false },
+    delivered: { type: Boolean, default: false },
     timestamp: { type: Date, default: Date.now }
   }],
   lastMessage: String,

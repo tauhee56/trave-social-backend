@@ -489,4 +489,97 @@ router.patch('/:userId/sections-order', async (req, res) => {
   }
 });
 
-module.exports = router;
+// POST /api/users/:userId/saved - Save a post
+router.post('/:userId/saved', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { postId } = req.body;
+
+    if (!postId) {
+      return res.status(400).json({ success: false, error: 'postId required' });
+    }
+
+    const Post = mongoose.model('Post');
+    const post = await Post.findById(postId);
+
+    if (!post) {
+      return res.status(404).json({ success: false, error: 'Post not found' });
+    }
+
+    // Check if already saved
+    if (post.savedBy.includes(userId)) {
+      return res.json({ success: true, message: 'Post already saved' });
+    }
+
+    // Add user to savedBy array
+    post.savedBy.push(userId);
+    post.savesCount = post.savedBy.length;
+    await post.save();
+
+    console.log(`✅ Post ${postId} saved by user ${userId}`);
+    res.json({ success: true, data: post });
+  } catch (err) {
+    console.error('[POST /:userId/saved] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/users/:userId/saved/:postId - Unsave a post
+router.delete('/:userId/saved/:postId', async (req, res) => {
+  try {
+    const { userId, postId } = req.params;
+
+    const Post = mongoose.model('Post');
+    const post = await Post.findById(postId);
+
+    if (!post) {
+      return res.status(404).json({ success: false, error: 'Post not found' });
+    }
+
+    // Remove user from savedBy array
+    post.savedBy = post.savedBy.filter(id => id !== userId);
+    post.savesCount = post.savedBy.length;
+    await post.save();
+
+    console.log(`✅ Post ${postId} unsaved by user ${userId}`);
+    res.json({ success: true, data: post });
+  } catch (err) {
+    console.error('[DELETE /:userId/saved/:postId] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/users/:userId/saved - Get all saved posts for a user
+router.get('/:userId/saved', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 20, skip = 0 } = req.query;
+
+    const Post = mongoose.model('Post');
+    
+    // Find posts where this user is in savedBy array
+    const savedPosts = await Post.find({ savedBy: userId })
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .skip(parseInt(skip))
+      .exec();
+
+    const totalSavedCount = await Post.countDocuments({ savedBy: userId });
+
+    console.log(`✅ Retrieved ${savedPosts.length} saved posts for user ${userId}`);
+    res.json({ 
+      success: true, 
+      data: savedPosts,
+      pagination: {
+        total: totalSavedCount,
+        limit: parseInt(limit),
+        skip: parseInt(skip),
+        hasMore: parseInt(skip) + parseInt(limit) < totalSavedCount
+      }
+    });
+  } catch (err) {
+    console.error('[GET /:userId/saved] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+

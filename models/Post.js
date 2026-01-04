@@ -24,6 +24,8 @@ const PostSchema = new mongoose.Schema({
   likesCount: { type: Number, default: 0 },
   comments: { type: Number, default: 0 },
   commentsCount: { type: Number, default: 0 },
+  savedBy: { type: [String], default: [] }, // Array of user IDs who saved this post
+  savesCount: { type: Number, default: 0 }, // Count of saves
   isPrivate: { type: Boolean, default: false }, // Privacy flag: true = private account post
   allowedFollowers: { type: [String], default: [] }, // Array of follower IDs who can see this private post
   createdAt: { type: Date, default: Date.now },
