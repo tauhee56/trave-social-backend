@@ -1734,7 +1734,7 @@ app.get('/api/branding', (req, res) => {
     data: {
       appName: 'Trave Social',
       logoUrl: 'https://res.cloudinary.com/dinwxxnzm/image/upload/v1766418070/logo/logo.png',
-      splashIcon: 'https://res.cloudinary.com/dinwxxnzm/image/upload/v1766418237/splash/splash-icon.png',
+      splashIcon: 'https://res.cloudinary.com/dinwxxnzm/image/upload/v1767485380/splash/splash-icon.png',
       primaryColor: '#007AFF',
       secondaryColor: '#5856D6'
     }
