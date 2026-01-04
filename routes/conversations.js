@@ -99,14 +99,16 @@ router.post('/:id/messages', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing senderId and/or text' });
     }
 
-    // Try to find by string ID first, then by MongoDB ObjectId
-    let convo = await Conversation.findOne({ 
+    // Try to find by string ID first, then by MongoDB ObjectId, then by participants
+    let convo = await Conversation.findOne({
       $or: [
         { conversationId: conversationId },
-        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
-      ]
+        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null },
+        // Also check by participants to avoid duplicates
+        recipientId ? { participants: { $all: [actualSenderId, recipientId] } } : null
+      ].filter(Boolean)
     });
-    
+
     if (!convo) {
       console.log('[POST] /:id/messages - Conversation not found, creating new one:', conversationId);
       // Conversation doesn't exist yet, create it
@@ -115,17 +117,21 @@ router.post('/:id/messages', async (req, res) => {
       if (recipientId) {
         participants.push(recipientId);
       }
-      
+
       if (participants.length < 2) {
         console.error('[POST] ERROR: Cannot create conversation without 2 participants! Got:', participants);
         return res.status(400).json({ success: false, error: 'Requires both senderId and recipientId' });
       }
-      
-      console.log('[POST] Creating conversation with participants:', participants, 'senderId:', actualSenderId, 'recipientId:', recipientId);
-      
-      convo = new Conversation({ 
-        conversationId: conversationId,
-        participants: participants.sort()
+
+      // Sort participants to ensure consistent conversationId
+      const sortedParticipants = participants.sort();
+      const standardConversationId = `${sortedParticipants[0]}_${sortedParticipants[1]}`;
+
+      console.log('[POST] Creating conversation with participants:', sortedParticipants, 'conversationId:', standardConversationId);
+
+      convo = new Conversation({
+        conversationId: standardConversationId,
+        participants: sortedParticipants
       });
     }
     
@@ -159,7 +165,7 @@ router.post('/:id/messages', async (req, res) => {
     convo.lastMessageAt = new Date();
     convo.updatedAt = new Date();
     await convo.save();
-    
+
     console.log('[POST] /:id/messages - Message saved successfully!');
     console.log('[POST] Conversation state after save:', {
       conversationId: convo.conversationId,
@@ -167,7 +173,56 @@ router.post('/:id/messages', async (req, res) => {
       messageCount: convo.messages?.length,
       lastMessage: convo.lastMessage
     });
-    
+
+    // Emit message to recipient via Socket.IO for real-time delivery
+    try {
+      const io = req.app.get('io');
+      console.log('[Socket] IO instance available?', !!io);
+
+      if (!io) {
+        console.error('[Socket] ❌ IO instance not found on req.app');
+      } else if (!recipientId) {
+        console.warn('[Socket] ⚠️ No recipientId provided, skipping emit');
+      } else {
+        // Use the actual conversationId from the saved conversation (not the route param)
+        const actualConversationId = convo.conversationId;
+        console.log('[Socket] 📡 Emitting newMessage to conversationId:', actualConversationId);
+        console.log('[Socket] 📡 Message data:', {
+          messageId: message.id,
+          senderId: actualSenderId,
+          recipientId: recipientId,
+          text: message.text?.substring(0, 30)
+        });
+
+        // Emit to conversation room (both users subscribed to this)
+        io.to(actualConversationId).emit('newMessage', {
+          ...message,
+          conversationId: actualConversationId
+        });
+        console.log('[Socket] ✅ Emitted to conversation room:', actualConversationId);
+
+        // Also emit to recipient's personal room
+        io.to(`user_${recipientId}`).emit('newMessage', {
+          ...message,
+          conversationId: actualConversationId
+        });
+        console.log('[Socket] ✅ Emitted to recipient room:', `user_${recipientId}`);
+
+        // Also emit to sender's personal room for multi-device sync
+        io.to(`user_${actualSenderId}`).emit('newMessage', {
+          ...message,
+          conversationId: actualConversationId
+        });
+        console.log('[Socket] ✅ Emitted to sender room:', `user_${actualSenderId}`);
+
+        console.log('[Socket] ✅✅✅ All emits complete!');
+      }
+    } catch (socketError) {
+      console.error('[Socket] ❌ Error emitting message:', socketError);
+      console.error('[Socket] ❌ Error stack:', socketError.stack);
+      // Don't fail the request if socket emit fails
+    }
+
     res.json({ success: true, message });
   } catch (err) {
     console.error('[POST] /:id/messages - Error:', err.message);

@@ -56,6 +56,10 @@ const io = new Server(server, {
 
 console.log('✅ Socket.IO server initialized');
 
+// Make io accessible to routes
+app.set('io', io);
+console.log('✅ Socket.IO attached to Express app');
+
 // ============= HELPER FUNCTIONS =============
 // Helper function to convert string to ObjectId (using mongoose.Types.ObjectId to avoid BSON version conflicts)
 const toObjectId = (id) => {
@@ -2771,10 +2775,30 @@ io.on('connection', (socket) => {
     if (userId) {
       connectedUsers.set(userId, socket.id);
       socket.userId = userId;
+
+      // Join user's personal room
+      socket.join(`user_${userId}`);
+
       console.log(`👤 User ${userId} joined with socket ${socket.id}`);
 
       // Notify user they're connected
       socket.emit('connected', { userId, socketId: socket.id });
+    }
+  });
+
+  // User subscribes to a conversation
+  socket.on('subscribeToConversation', (conversationId) => {
+    if (conversationId) {
+      socket.join(conversationId);
+      console.log(`📬 Socket ${socket.id} subscribed to conversation: ${conversationId}`);
+    }
+  });
+
+  // User unsubscribes from a conversation
+  socket.on('unsubscribeFromConversation', (conversationId) => {
+    if (conversationId) {
+      socket.leave(conversationId);
+      console.log(`📭 Socket ${socket.id} unsubscribed from conversation: ${conversationId}`);
     }
   });
 
@@ -2809,23 +2833,37 @@ io.on('connection', (socket) => {
         convo.lastMessageAt = new Date();
         await convo.save();
 
-        // Emit to sender (confirmation)
-        socket.emit('messageSent', { ...message, conversationId });
+        // Use the actual conversationId from database
+        const actualConversationId = convo.conversationId;
 
-        // Emit to recipient if online
+        // Emit to sender (confirmation)
+        socket.emit('messageSent', { ...message, conversationId: actualConversationId });
+
+        // Emit to conversation room (all subscribers)
+        io.to(actualConversationId).emit('newMessage', { ...message, conversationId: actualConversationId });
+
+        // Emit to recipient's personal room
+        io.to(`user_${recipientId}`).emit('newMessage', { ...message, conversationId: actualConversationId });
+
+        // Emit to sender's personal room (for multi-device sync)
+        io.to(`user_${senderId}`).emit('newMessage', { ...message, conversationId: actualConversationId });
+
+        // Check if recipient is online for delivery status
         const recipientSocketId = connectedUsers.get(recipientId);
         if (recipientSocketId) {
-          io.to(recipientSocketId).emit('newMessage', { ...message, conversationId });
-
           // Mark as delivered
           message.delivered = true;
           await convo.save();
 
           // Notify sender of delivery
-          socket.emit('messageDelivered', { messageId: message.id, conversationId });
+          socket.emit('messageDelivered', { messageId: message.id, conversationId: actualConversationId });
         }
 
-        console.log('✅ Message saved and emitted');
+        console.log('✅ Message saved and emitted to rooms:', {
+          conversationRoom: actualConversationId,
+          recipientRoom: `user_${recipientId}`,
+          senderRoom: `user_${senderId}`
+        });
       }
     } catch (error) {
       console.error('❌ Error handling sendMessage:', error);
