@@ -22,8 +22,9 @@ const PostSchema = new mongoose.Schema({
   taggedUserIds: { type: [String], default: [] },
   likes: { type: [String], default: [] },
   likesCount: { type: Number, default: 0 },
-  comments: { type: Number, default: 0 },
-  commentsCount: { type: Number, default: 0 },
+  comments: { type: Array, default: [] }, // Array of comment objects (when stored in post)
+  commentsCount: { type: Number, default: 0 }, // Cached count
+  commentCount: { type: Number, default: 0 }, // Alias for frontend compatibility
   savedBy: { type: [String], default: [] }, // Array of user IDs who saved this post
   savesCount: { type: Number, default: 0 }, // Count of saves
   isPrivate: { type: Boolean, default: false }, // Privacy flag: true = private account post

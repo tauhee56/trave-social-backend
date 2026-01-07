@@ -26,6 +26,14 @@ const UserSchema = new mongoose.Schema({
     unique: true,
     sparse: true, // Allow multiple null values
   },
+  pushToken: {
+    type: String,
+    default: null,
+  },
+  pushTokenUpdatedAt: {
+    type: Date,
+    default: null,
+  },
   provider: {
     type: String,
     enum: ['email', 'google', 'apple', 'facebook'],

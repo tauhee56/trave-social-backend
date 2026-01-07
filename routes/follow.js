@@ -35,6 +35,21 @@ router.post('/', async (req, res) => {
     const follow = new Follow({ followerId, followingId });
     await follow.save();
 
+    // Best-effort: create follow notification
+    try {
+      const db = mongoose.connection.db;
+      await db.collection('notifications').insertOne({
+        recipientId: String(followingId),
+        senderId: String(followerId),
+        type: 'follow',
+        message: 'started following you',
+        read: false,
+        createdAt: new Date()
+      });
+    } catch (e) {
+      console.warn('[POST /follow] Notification skipped:', e.message);
+    }
+
     // Update follower/following counts in User model
     const User = mongoose.model('User');
 

@@ -2,22 +2,30 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
+const { verifyToken } = require('../src/middleware/authMiddleware');
+
 console.log('📨 Loading conversations route...');
 
 // Get the Conversation model (already defined in models/Conversation.js and required in index.js)
 const Conversation = mongoose.model('Conversation');
 
 // Get conversations for user with populated participant data
-router.get('/', async (req, res) => {
+router.get('/', verifyToken, async (req, res) => {
   try {
-    const userId = req.query.userId;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: 'userId query parameter required' });
-    }
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+    const userId = userIdFromToken;
 
     console.log('[GET] /conversations - Fetching for userId:', userId);
 
-    const conversations = await Conversation.find({ participants: userId }).sort({ lastMessageAt: -1 });
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const idsToMatch = [String(userId)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    const conversations = await Conversation.find({ participants: { $in: idsToMatch } }).sort({ lastMessageAt: -1 });
     
     console.log('[GET] /conversations - Found', conversations.length, 'conversations for user:', userId);
     conversations.forEach((c, i) => {
@@ -65,38 +73,240 @@ router.get('/', async (req, res) => {
 });
 
 // Get messages for a conversation
-router.get('/:id/messages', async (req, res) => {
+router.get('/:id/messages', verifyToken, async (req, res) => {
   try {
     const conversationId = req.params.id;
-    
-    // Try to find by string ID first, then by MongoDB ObjectId
-    let convo = await Conversation.findOne({ 
-      $or: [
-        { conversationId: conversationId },
-        { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
-      ]
-    });
-    
-    if (!convo) {
+
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+    const idsToMatch = [String(userIdFromToken)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    const User = mongoose.model('User');
+    const resolveUserIdVariants = async (id) => {
+      const out = new Set([String(id)]);
+      try {
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          const byId = await User.findById(id).select('_id firebaseUid uid');
+          if (byId?._id) out.add(String(byId._id));
+          if (byId?.firebaseUid) out.add(String(byId.firebaseUid));
+          if (byId?.uid) out.add(String(byId.uid));
+        }
+
+        const byAlt = await User.findOne({ $or: [{ firebaseUid: id }, { uid: id }] }).select('_id firebaseUid uid');
+        if (byAlt?._id) out.add(String(byAlt._id));
+        if (byAlt?.firebaseUid) out.add(String(byAlt.firebaseUid));
+        if (byAlt?.uid) out.add(String(byAlt.uid));
+      } catch {}
+      return Array.from(out);
+    };
+
+    let convos = [];
+
+    // If conversationId looks like "id1_id2", treat as pair key and merge legacy duplicates
+    if (typeof conversationId === 'string' && conversationId.includes('_')) {
+      const parts = conversationId.split('_');
+      const a = parts[0];
+      const b = parts[1];
+      const aIds = await resolveUserIdVariants(a);
+      const bIds = await resolveUserIdVariants(b);
+      convos = await Conversation.find({
+        $and: [
+          { participants: { $in: aIds } },
+          { participants: { $in: bIds } }
+        ]
+      }).sort({ lastMessageAt: -1 });
+    } else {
+      // Try to find by string ID first, then by MongoDB ObjectId
+      const single = await Conversation.findOne({
+        $or: [
+          { conversationId: conversationId },
+          { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+        ]
+      });
+      if (single) convos = [single];
+    }
+
+    if (!convos || convos.length === 0) {
       return res.status(404).json({ success: false, error: 'Conversation not found' });
     }
-    res.json({ success: true, messages: convo.messages || [] });
+
+    // Privacy: only participants can read (for all merged convos)
+    const allowed = convos.some(c => {
+      const participants = Array.isArray(c?.participants) ? c.participants.map(String) : [];
+      return idsToMatch.some(id => participants.includes(String(id)));
+    });
+
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    // Merge messages across duplicate conversations
+    const merged = [];
+    const seen = new Set();
+    for (const c of convos) {
+      for (const m of (c?.messages || [])) {
+        const mid = m?.id;
+        if (typeof mid === 'string' && mid.length > 0) {
+          if (seen.has(mid)) continue;
+          seen.add(mid);
+        }
+        merged.push(m);
+      }
+    }
+
+    merged.sort((m1, m2) => {
+      const t1 = new Date(m1?.timestamp || 0).getTime() || 0;
+      const t2 = new Date(m2?.timestamp || 0).getTime() || 0;
+      return t1 - t2;
+    });
+
+    res.json({ success: true, messages: merged });
   } catch (err) {
     console.error('[GET] /:id/messages - Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// Mark all messages as read for the authenticated user in a conversation
+router.patch('/:id/read', verifyToken, async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+    const idsToMatch = [String(userIdFromToken)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    const User = mongoose.model('User');
+    const resolveUserIdVariants = async (id) => {
+      const out = new Set([String(id)]);
+      try {
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          const byId = await User.findById(id).select('_id firebaseUid uid');
+          if (byId?._id) out.add(String(byId._id));
+          if (byId?.firebaseUid) out.add(String(byId.firebaseUid));
+          if (byId?.uid) out.add(String(byId.uid));
+        }
+
+        const byAlt = await User.findOne({ $or: [{ firebaseUid: id }, { uid: id }] }).select('_id firebaseUid uid');
+        if (byAlt?._id) out.add(String(byAlt._id));
+        if (byAlt?.firebaseUid) out.add(String(byAlt.firebaseUid));
+        if (byAlt?.uid) out.add(String(byAlt.uid));
+      } catch {}
+      return Array.from(out);
+    };
+
+    let convos = [];
+
+    if (typeof conversationId === 'string' && conversationId.includes('_')) {
+      const parts = conversationId.split('_');
+      const a = parts[0];
+      const b = parts[1];
+      const aIds = await resolveUserIdVariants(a);
+      const bIds = await resolveUserIdVariants(b);
+      convos = await Conversation.find({
+        $and: [
+          { participants: { $in: aIds } },
+          { participants: { $in: bIds } }
+        ]
+      }).sort({ lastMessageAt: -1 });
+    } else {
+      const single = await Conversation.findOne({
+        $or: [
+          { conversationId: conversationId },
+          { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null }
+        ]
+      });
+
+      // If we found a conversation, expand to all legacy duplicates for this participant pair
+      if (single && Array.isArray(single?.participants) && single.participants.length === 2) {
+        const p0 = String(single.participants[0]);
+        const p1 = String(single.participants[1]);
+        const p0Ids = await resolveUserIdVariants(p0);
+        const p1Ids = await resolveUserIdVariants(p1);
+        convos = await Conversation.find({
+          $and: [
+            { participants: { $in: p0Ids } },
+            { participants: { $in: p1Ids } }
+          ]
+        }).sort({ lastMessageAt: -1 });
+      } else if (single) {
+        convos = [single];
+      }
+    }
+
+    if (!convos || convos.length === 0) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    const allowed = convos.some(c => {
+      const participants = Array.isArray(c?.participants) ? c.participants.map(String) : [];
+      return idsToMatch.some(id => participants.includes(String(id)));
+    });
+
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    let markedCount = 0;
+    for (const c of convos) {
+      let changed = false;
+      for (const m of (c?.messages || [])) {
+        const recipientId = m?.recipientId != null ? String(m.recipientId) : '';
+        const isForMe = recipientId && idsToMatch.some(id => String(id) === recipientId);
+        if (isForMe && m?.read === false) {
+          m.read = true;
+          markedCount += 1;
+          changed = true;
+        }
+      }
+      if (changed) {
+        c.updatedAt = new Date();
+        await c.save();
+      }
+    }
+
+    return res.json({ success: true, markedCount });
+  } catch (err) {
+    console.error('[PATCH] /:id/read - Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Send a message in a conversation (POST /:id/messages)
-router.post('/:id/messages', async (req, res) => {
+router.post('/:id/messages', verifyToken, async (req, res) => {
   try {
     const conversationId = req.params.id;
     const { senderId, sender, text, recipientId, replyTo, read } = req.body;
     
-    // Accept both senderId and sender for compatibility
-    const actualSenderId = senderId || sender;
+    // Sender must be the authenticated user
+    const actualSenderId = String(req.userId || senderId || sender || '');
     if (!actualSenderId || !text) {
       return res.status(400).json({ success: false, error: 'Missing senderId and/or text' });
+    }
+
+    // Normalize recipientId to Mongo _id string where possible
+    const User = mongoose.model('User');
+    let normalizedRecipientId = recipientId ? String(recipientId) : null;
+    if (normalizedRecipientId && !mongoose.Types.ObjectId.isValid(normalizedRecipientId)) {
+      const found = await User.findOne({ $or: [{ firebaseUid: normalizedRecipientId }, { uid: normalizedRecipientId }] }).select('_id');
+      if (found?._id) {
+        normalizedRecipientId = String(found._id);
+      }
+    }
+
+    if (!normalizedRecipientId) {
+      return res.status(400).json({ success: false, error: 'Requires recipientId' });
+    }
+
+    // Also normalize sender if somehow a firebase uid was passed
+    let normalizedSenderId = String(actualSenderId);
+    if (!mongoose.Types.ObjectId.isValid(normalizedSenderId)) {
+      const foundSender = await User.findOne({ $or: [{ firebaseUid: normalizedSenderId }, { uid: normalizedSenderId }] }).select('_id');
+      if (foundSender?._id) {
+        normalizedSenderId = String(foundSender._id);
+      }
     }
 
     // Try to find by string ID first, then by MongoDB ObjectId, then by participants
@@ -105,7 +315,7 @@ router.post('/:id/messages', async (req, res) => {
         { conversationId: conversationId },
         { _id: mongoose.Types.ObjectId.isValid(conversationId) ? new mongoose.Types.ObjectId(conversationId) : null },
         // Also check by participants to avoid duplicates
-        recipientId ? { participants: { $all: [actualSenderId, recipientId] } } : null
+        normalizedRecipientId ? { participants: { $all: [normalizedSenderId, normalizedRecipientId] } } : null
       ].filter(Boolean)
     });
 
@@ -113,10 +323,7 @@ router.post('/:id/messages', async (req, res) => {
       console.log('[POST] /:id/messages - Conversation not found, creating new one:', conversationId);
       // Conversation doesn't exist yet, create it
       // Use actual IDs from request body to avoid parsing issues with underscores in user IDs
-      const participants = [actualSenderId];
-      if (recipientId) {
-        participants.push(recipientId);
-      }
+      const participants = [normalizedSenderId, normalizedRecipientId];
 
       if (participants.length < 2) {
         console.error('[POST] ERROR: Cannot create conversation without 2 participants! Got:', participants);
@@ -141,16 +348,14 @@ router.post('/:id/messages', async (req, res) => {
     }
     
     const message = { 
-      senderId: actualSenderId, 
+      senderId: normalizedSenderId, 
       text,
       read: read || false,
       timestamp: new Date()
     };
     
     // Add recipientId if provided
-    if (recipientId) {
-      message.recipientId = recipientId;
-    }
+    message.recipientId = normalizedRecipientId;
     
     // Add replyTo if replying to a message
     if (replyTo) {
@@ -165,6 +370,33 @@ router.post('/:id/messages', async (req, res) => {
     convo.lastMessageAt = new Date();
     convo.updatedAt = new Date();
     await convo.save();
+
+    // Best-effort: create notification for recipient
+    try {
+      if (normalizedRecipientId && normalizedRecipientId !== normalizedSenderId) {
+        const db = mongoose.connection.db;
+        const usersCollection = db.collection('users');
+        const senderUser = mongoose.Types.ObjectId.isValid(normalizedSenderId)
+          ? await usersCollection.findOne({ _id: new mongoose.Types.ObjectId(normalizedSenderId) })
+          : null;
+        const senderName = senderUser?.displayName || senderUser?.name || 'Someone';
+        const senderAvatar = senderUser?.avatar || senderUser?.photoURL || null;
+
+        await db.collection('notifications').insertOne({
+          recipientId: String(normalizedRecipientId),
+          senderId: String(normalizedSenderId),
+          senderName,
+          senderAvatar,
+          type: 'message',
+          conversationId: String(convo.conversationId || conversationId),
+          message: 'messaged you',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+    } catch (e) {
+      console.warn('[POST] /:id/messages - Notification skipped:', e.message);
+    }
 
     console.log('[POST] /:id/messages - Message saved successfully!');
     console.log('[POST] Conversation state after save:', {
@@ -181,7 +413,7 @@ router.post('/:id/messages', async (req, res) => {
 
       if (!io) {
         console.error('[Socket] ❌ IO instance not found on req.app');
-      } else if (!recipientId) {
+      } else if (!normalizedRecipientId) {
         console.warn('[Socket] ⚠️ No recipientId provided, skipping emit');
       } else {
         // Use the actual conversationId from the saved conversation (not the route param)
@@ -189,8 +421,8 @@ router.post('/:id/messages', async (req, res) => {
         console.log('[Socket] 📡 Emitting newMessage to conversationId:', actualConversationId);
         console.log('[Socket] 📡 Message data:', {
           messageId: message.id,
-          senderId: actualSenderId,
-          recipientId: recipientId,
+          senderId: normalizedSenderId,
+          recipientId: normalizedRecipientId,
           text: message.text?.substring(0, 30)
         });
 
@@ -202,18 +434,18 @@ router.post('/:id/messages', async (req, res) => {
         console.log('[Socket] ✅ Emitted to conversation room:', actualConversationId);
 
         // Also emit to recipient's personal room
-        io.to(`user_${recipientId}`).emit('newMessage', {
+        io.to(`user_${normalizedRecipientId}`).emit('newMessage', {
           ...message,
           conversationId: actualConversationId
         });
-        console.log('[Socket] ✅ Emitted to recipient room:', `user_${recipientId}`);
+        console.log('[Socket] ✅ Emitted to recipient room:', `user_${normalizedRecipientId}`);
 
         // Also emit to sender's personal room for multi-device sync
-        io.to(`user_${actualSenderId}`).emit('newMessage', {
+        io.to(`user_${normalizedSenderId}`).emit('newMessage', {
           ...message,
           conversationId: actualConversationId
         });
-        console.log('[Socket] ✅ Emitted to sender room:', `user_${actualSenderId}`);
+        console.log('[Socket] ✅ Emitted to sender room:', `user_${normalizedSenderId}`);
 
         console.log('[Socket] ✅✅✅ All emits complete!');
       }
@@ -231,28 +463,45 @@ router.post('/:id/messages', async (req, res) => {
 });
 
 // Get or create conversation
-router.post('/get-or-create', async (req, res) => {
+router.post('/get-or-create', verifyToken, async (req, res) => {
   try {
     const { userId1, userId2 } = req.body;
-    const ids = [userId1, userId2].sort();
+
+    const User = mongoose.model('User');
+    const normalizeToMongo = async (id) => {
+      const raw = String(id || '');
+      if (!raw) return null;
+      if (mongoose.Types.ObjectId.isValid(raw)) return raw;
+      const found = await User.findOne({ $or: [{ firebaseUid: raw }, { uid: raw }] }).select('_id');
+      return found?._id ? String(found._id) : raw;
+    };
+
+    const a = await normalizeToMongo(userId1);
+    const b = await normalizeToMongo(userId2);
+    if (!a || !b) {
+      return res.status(400).json({ success: false, error: 'userId1 and userId2 required' });
+    }
+
+    const ids = [a, b].map(String).sort();
     const conversationId = `${ids[0]}_${ids[1]}`;
-    
-    let conversation = await Conversation.findOne({
+
+    const matches = await Conversation.find({
       $or: [
         { conversationId: conversationId },
-        { participants: { $all: [userId1, userId2] } }
+        { participants: { $all: ids } }
       ]
-    });
-    
+    }).sort({ lastMessageAt: -1 });
+
+    let conversation = matches?.[0] || null;
     if (!conversation) {
-      conversation = new Conversation({ 
-        conversationId: conversationId,
-        participants: [userId1, userId2] 
+      conversation = new Conversation({
+        conversationId,
+        participants: ids
       });
       await conversation.save();
     }
-    
-    res.json({ success: true, id: conversation._id, conversationId: conversationId });
+
+    res.json({ success: true, id: conversation._id, conversationId });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

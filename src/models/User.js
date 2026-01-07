@@ -22,6 +22,7 @@ const UserSchema = new mongoose.Schema({
   banReason: String,
   bannedAt: Date,
   isVerified: { type: Boolean, default: false },
+  savedPosts: { type: [String], default: [] }, // Array of saved post IDs
   updatedAt: { type: Date, default: Date.now }
 });
 

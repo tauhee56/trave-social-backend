@@ -10,6 +10,8 @@ const jwt = require('jsonwebtoken');
 const cloudinary = require('cloudinary').v2;
 const { Server } = require('socket.io');
 
+const { verifyToken } = require('./middleware/authMiddleware');
+
 // Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -33,7 +35,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 
 // ============= MULTER SETUP FOR FILE UPLOADS =============
 const multer = require('multer');
-const upload = multer({ 
+const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit for videos
 });
@@ -76,12 +78,12 @@ const toObjectId = (id) => {
 try {
   const serviceAccountPath = path.join(__dirname, '../serviceAccountKey.json');
   const serviceAccount = require(serviceAccountPath);
-  
+
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     projectId: process.env.FIREBASE_PROJECT_ID || serviceAccount.project_id,
   });
-  
+
   console.log('✅ Firebase Admin initialized successfully');
 } catch (error) {
   console.warn('⚠️ Firebase Admin initialization warning:', error.message);
@@ -107,8 +109,8 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/api/status', (req, res) => {
-  res.json({ 
-    status: 'running', 
+  res.json({
+    status: 'running',
     timestamp: new Date(),
     port: PORT
   });
@@ -135,7 +137,7 @@ console.log('🔧 Loading router-based routes first...');
 
 // User routes - REGISTER FIRST for nested routes like /api/users/:userId/posts
 try {
-  app.use('/api/users', require('../routes/users'));
+  app.use('/api/users', require('../routes/user'));
   console.log('  ✅ /api/users (router) loaded - REGISTERED FIRST');
 } catch (err) {
   console.warn('  ⚠️ /api/users (router) error:', err.message);
@@ -143,6 +145,31 @@ try {
 
 // Then load inline routes
 console.log('🔧 Loading critical inline GET routes...');
+
+app.get('/api/live-streams', async (req, res) => {
+  console.log('  → GET /api/live-streams called');
+  try {
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+
+    const streams = await livestreamsCollection
+      .find({ isActive: true })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const normalized = (Array.isArray(streams) ? streams : []).map(s => ({
+      ...s,
+      id: s?._id ? String(s._id) : (s?.id ? String(s.id) : undefined),
+      _id: s?._id
+    }));
+
+    return res.status(200).json({ success: true, streams: normalized });
+  } catch (err) {
+    console.warn('[GET] /api/live-streams error:', err.message);
+    return res.status(200).json({ success: true, streams: [] });
+  }
+});
+console.log('  ✅ /api/live-streams loaded');
 
 // Health check endpoint for monitoring and cold start detection
 app.get('/api/health', (req, res) => {
@@ -159,34 +186,34 @@ app.get('/api/posts', async (req, res) => {
   try {
     const { skip = 0, limit = 50 } = req.query;
     const currentUserId = req.headers.userid || null; // Get current user from header (optional)
-    
+
     const posts = await mongoose.model('Post').find()
       .sort({ createdAt: -1 })
       .skip(parseInt(skip))
       .limit(parseInt(limit))
       .populate('userId', 'displayName name avatar profilePicture photoURL isPrivate followers')
       .catch(() => []);
-    
+
     // Enrich posts and apply privacy filter
     const enrichedPosts = posts.map(post => {
       const postObj = post.toObject ? post.toObject() : post;
-      
+
       // Calculate likes count
       let likesCount = postObj.likesCount;
       const likesArray = postObj.likes || [];
       const calculatedCount = Array.isArray(likesArray) ? likesArray.length : (typeof likesArray === 'object' ? Object.keys(likesArray).length : 0);
-      
+
       if (!likesCount || likesCount === undefined || likesCount === 0) {
         likesCount = calculatedCount;
       }
-      
-      // Calculate comments count
-      let commentCount = postObj.commentCount;
-      if (!commentCount || commentCount === undefined) {
-        const commentsArray = postObj.comments || [];
-        commentCount = Array.isArray(commentsArray) ? commentsArray.length : (typeof commentsArray === 'object' ? Object.keys(commentsArray).length : 0);
+
+      // Use comment count from DB - prefer commentCount field, fallback to commentsCount
+      // Don't recalculate from comments array since comments are in separate collection
+      let commentCount = postObj.commentCount !== undefined ? postObj.commentCount : postObj.commentsCount;
+      if (commentCount === undefined || commentCount === null) {
+        commentCount = 0; // Default if neither field exists
       }
-      
+
       return {
         ...postObj,
         likesCount,
@@ -195,12 +222,12 @@ app.get('/api/posts', async (req, res) => {
         allowedFollowers: postObj.allowedFollowers || []
       };
     });
-    
+
     console.log('🟢 [INLINE] /api/posts SUCCESS - returning', enrichedPosts.length, 'posts');
     enrichedPosts.slice(0, 1).forEach(p => {
       console.log(`  Post response: id=${p._id}, likesCount=${p.likesCount}, isPrivate=${p.isPrivate}, allowedFollowers=${p.allowedFollowers?.length || 0}`);
     });
-    
+
     res.status(200).json({ success: true, data: enrichedPosts });
   } catch (err) {
     console.log('🟢 [INLINE] /api/posts ERROR:', err.message);
@@ -214,9 +241,8 @@ app.get('/api/posts/feed', async (req, res) => {
     const posts = await mongoose.model('Post').find()
       .sort({ createdAt: -1 })
       .limit(50)
-      .populate('userId', 'displayName name avatar profilePicture photoURL isPrivate followers')
-      .catch(() => []);
-    
+      .populate('userId', 'displayName name avatar profilePicture photoURL');
+
     const enrichedPosts = (Array.isArray(posts) ? posts : []).map(p => {
       const postObj = p.toObject ? p.toObject() : p;
       return {
@@ -225,7 +251,7 @@ app.get('/api/posts/feed', async (req, res) => {
         allowedFollowers: postObj.allowedFollowers || []
       };
     });
-    
+
     res.status(200).json({ success: true, data: enrichedPosts });
   } catch (err) {
     res.status(200).json({ success: true, data: [] });
@@ -243,11 +269,11 @@ app.get('/api/posts/location-count', async (req, res) => {
       { $sort: { count: -1 } },
       { $limit: 20 }
     ]).catch(() => []);
-    
-    return res.json({ 
-      success: true, 
+
+    return res.json({
+      success: true,
       hasData: locations && locations.length > 0,
-      data: locations || [] 
+      data: locations || []
     });
   } catch (err) {
     console.error('[GET] /api/posts/location-count error:', err.message);
@@ -260,26 +286,26 @@ console.log('  ✅ /api/posts/location-count loaded');
 app.post('/api/posts', async (req, res) => {
   try {
     const { userId, content, caption, mediaUrls, imageUrls, location, locationData, mediaType, category, hashtags, mentions, taggedUserIds } = req.body;
-    
+
     // Accept both 'content' and 'caption' for compatibility
     const finalContent = content || caption || '';
-    
+
     // Handle both single imageUrl and mediaUrls array
     const images = mediaUrls && mediaUrls.length > 0 ? mediaUrls : (imageUrls ? imageUrls : []);
-    
+
     // Validation: Either content or media is required
     if (!userId || (!finalContent && (!images || images.length === 0))) {
       return res.status(400).json({ success: false, error: 'userId and either caption or media required' });
     }
-    
+
     const Post = mongoose.model('Post');
     const User = mongoose.model('User');
-    
+
     // Get user's privacy setting
     const user = await User.findById(userId).catch(() => null);
     const isPrivate = user?.isPrivate || false;
     const allowedFollowers = isPrivate ? (user?.followers || []) : []; // If private, only followers can see
-    
+
     const newPost = new Post({
       userId,
       content: finalContent,
@@ -301,13 +327,56 @@ app.post('/api/posts', async (req, res) => {
       allowedFollowers,
       createdAt: new Date(),
     });
-    
+
     const saved = await newPost.save();
-    
+
+    // Best-effort: mention/tag notifications (no impact on post creation)
+    try {
+      const db = mongoose.connection.db;
+      const notificationsCollection = db.collection('notifications');
+
+      const mentioned = Array.isArray(mentions) ? mentions.map(String) : [];
+      const tagged = Array.isArray(taggedUserIds) ? taggedUserIds.map(String) : [];
+
+      const docs = [];
+
+      for (const m of mentioned) {
+        if (!m || m === String(userId)) continue;
+        docs.push({
+          recipientId: String(m),
+          senderId: String(userId),
+          type: 'mention',
+          postId: String(saved._id),
+          message: 'mentioned you in a post',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+
+      for (const t of tagged) {
+        if (!t || t === String(userId)) continue;
+        docs.push({
+          recipientId: String(t),
+          senderId: String(userId),
+          type: 'tag',
+          postId: String(saved._id),
+          message: 'tagged you in a post',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+
+      if (docs.length > 0) {
+        await notificationsCollection.insertMany(docs);
+      }
+    } catch (e) {
+      console.warn('[POST] /api/posts - Mention/tag notifications skipped:', e.message);
+    }
+
     // Populate user data
     const populated = await Post.findById(saved._id)
       .populate('userId', 'displayName name avatar profilePicture photoURL');
-    
+
     console.log('[POST] /api/posts - Created post:', populated._id);
     return res.status(201).json({ success: true, data: populated, postId: populated._id });
   } catch (err) {
@@ -316,88 +385,6 @@ app.post('/api/posts', async (req, res) => {
   }
 });
 
-// GET /api/posts/:postId - Get single post with populated user data
-app.get('/api/posts/:postId', async (req, res) => {
-  try {
-    const { postId } = req.params;
-    const Post = mongoose.model('Post');
-    
-    // Try ObjectId first
-    let post = null;
-    if (mongoose.Types.ObjectId.isValid(postId)) {
-      post = await Post.findById(postId)
-        .populate('userId', 'displayName name avatar profilePicture photoURL')
-        .catch(() => null);
-    }
-    
-    // Try string ID if ObjectId didn't work
-    if (!post) {
-      post = await Post.findOne({ id: postId })
-        .populate('userId', 'displayName name avatar profilePicture photoURL')
-        .catch(() => null);
-    }
-    
-    if (!post) {
-      return res.status(404).json({ success: false, error: 'Post not found' });
-    }
-    
-    console.log('[GET] /api/posts/:postId - Found post:', postId);
-    return res.json({ success: true, data: post });
-  } catch (err) {
-    console.error('[GET] /api/posts/:postId error:', err.message);
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.get('/api/categories', async (req, res) => {
-  console.log('  → GET /api/categories called');
-  try {
-    const categories = await mongoose.model('Category').find().catch(() => []);
-    console.log('  ✓ /api/categories returning 200 with', Array.isArray(categories) ? categories.length : 0, 'categories');
-    res.status(200).json({ success: true, data: Array.isArray(categories) ? categories : [] });
-  } catch (err) {
-    console.log('  ✓ /api/categories error, returning empty array:', err.message);
-    res.status(200).json({ success: true, data: [] });
-  }
-});
-
-app.get('/api/live-streams', async (req, res) => {
-  console.log('  → GET /api/live-streams called');
-  try {
-    const db = mongoose.connection.db;
-    const streams = await db.collection('livestreams')
-      .find({ isActive: true })
-      .toArray()
-      .catch(() => []);
-    console.log('  ✓ /api/live-streams returning 200 with', Array.isArray(streams) ? streams.length : 0, 'streams');
-    res.status(200).json({ success: true, data: Array.isArray(streams) ? streams : [] });
-  } catch (err) {
-    console.log('  ✓ /api/live-streams error, returning empty array:', err.message);
-    res.status(200).json({ success: true, data: [] });
-  }
-});
-console.log('  ✅ /api/live-streams (GET) loaded');
-
-// GET /api/live-streams/:streamId - Get single live stream
-app.get('/api/live-streams/:streamId', async (req, res) => {
-  try {
-    const db = mongoose.connection.db;
-    const stream = await db.collection('livestreams').findOne({ 
-      _id: toObjectId(req.params.streamId) 
-    });
-    
-    if (!stream) {
-      return res.status(404).json({ success: false, error: 'Stream not found' });
-    }
-    
-    res.json({ success: true, data: stream });
-  } catch (err) {
-    console.error('[GET] /api/live-streams/:streamId error:', err.message);
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-console.log('  ✅ /api/live-streams/:streamId (GET) loaded');
-
 // POST /api/live-streams - Start new live stream
 app.post('/api/live-streams', async (req, res) => {
   try {
@@ -405,10 +392,10 @@ app.post('/api/live-streams', async (req, res) => {
     if (!userId || !title) {
       return res.status(400).json({ success: false, error: 'userId and title required' });
     }
-    
+
     const db = mongoose.connection.db;
     const livestreamsCollection = db.collection('livestreams');
-    
+
     const newStream = {
       userId,
       title,
@@ -418,9 +405,35 @@ app.post('/api/live-streams', async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    
+
     const result = await livestreamsCollection.insertOne(newStream);
-    
+
+    // Best-effort: notify followers that user started live
+    try {
+      const follows = await db.collection('follows').find({ followingId: String(userId) }).toArray();
+      const followerIds = follows.map(f => String(f.followerId)).filter(Boolean);
+      if (followerIds.length > 0) {
+        const notificationsCollection = db.collection('notifications');
+        const docs = followerIds
+          .filter(fid => fid !== String(userId))
+          .map(fid => ({
+            recipientId: String(fid),
+            senderId: String(userId),
+            type: 'live',
+            streamId: String(result.insertedId),
+            message: 'started a live stream',
+            read: false,
+            createdAt: new Date()
+          }));
+
+        if (docs.length > 0) {
+          await notificationsCollection.insertMany(docs);
+        }
+      }
+    } catch (e) {
+      console.warn('[POST] /api/live-streams - Live notifications skipped:', e.message);
+    }
+
     console.log('[POST] /api/live-streams - Stream started:', result.insertedId);
     res.status(201).json({ success: true, id: result.insertedId, data: newStream });
   } catch (err) {
@@ -428,36 +441,35 @@ app.post('/api/live-streams', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-console.log('  ✅ /api/live-streams (POST) loaded');
 
 // PATCH /api/live-streams/:streamId/end - End live stream
 app.patch('/api/live-streams/:streamId/end', async (req, res) => {
   try {
     const { userId } = req.body;
     const { streamId } = req.params;
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
+
     const db = mongoose.connection.db;
     const livestreamsCollection = db.collection('livestreams');
-    
+
     const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
     if (!stream) {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
-    
+
     if (stream.userId !== userId) {
       return res.status(403).json({ success: false, error: 'Only stream owner can end the stream' });
     }
-    
+
     const updated = await livestreamsCollection.findOneAndUpdate(
       { _id: toObjectId(streamId) },
       { $set: { isActive: false, endedAt: new Date() } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[PATCH] /api/live-streams/:streamId/end - Stream ended:', streamId);
     res.json({ success: true, data: updated.value });
   } catch (err) {
@@ -465,31 +477,31 @@ app.patch('/api/live-streams/:streamId/end', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-console.log('  ✅ /api/live-streams/:streamId/end (PATCH) loaded');
+console.log('  /api/live-streams/:streamId/end (PATCH) loaded');
 
 // POST /api/live-streams/:streamId/agora-token - Generate Agora token
 app.post('/api/live-streams/:streamId/agora-token', async (req, res) => {
   try {
     const { userId, role } = req.body;
     const { streamId } = req.params;
-    
+
     if (!userId || !role) {
       return res.status(400).json({ success: false, error: 'userId and role required' });
     }
-    
+
     const db = mongoose.connection.db;
     const livestreamsCollection = db.collection('livestreams');
-    
+
     const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
     if (!stream) {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
-    
+
     // Generate Agora token (using RTC token v2 approach)
     // In production, use agora-token-builder package for proper token generation
     const agoraAppId = process.env.AGORA_APP_ID || 'demo-app-id';
     const agoraAppCertificate = process.env.AGORA_APP_CERTIFICATE || 'demo-app-certificate';
-    
+
     // Simple token format (for demo - use proper agora-token-builder in production)
     const token = Buffer.from(
       JSON.stringify({
@@ -501,7 +513,7 @@ app.post('/api/live-streams/:streamId/agora-token', async (req, res) => {
         timestamp: Math.floor(Date.now() / 1000)
       })
     ).toString('base64');
-    
+
     // Add viewer to stream if subscriber
     if (role === 'subscriber') {
       const viewers = stream.viewers || [];
@@ -509,8 +521,8 @@ app.post('/api/live-streams/:streamId/agora-token', async (req, res) => {
         viewers.push(userId);
         await livestreamsCollection.updateOne(
           { _id: toObjectId(streamId) },
-          { 
-            $set: { 
+          {
+            $set: {
               viewers,
               viewerCount: viewers.length
             }
@@ -518,10 +530,10 @@ app.post('/api/live-streams/:streamId/agora-token', async (req, res) => {
         );
       }
     }
-    
+
     console.log('[POST] /api/live-streams/:streamId/agora-token - Token generated for', userId, 'role:', role);
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       token,
       agoraAppId,
       channelName: streamId,
@@ -541,33 +553,33 @@ app.post('/api/live-streams/:streamId/leave', async (req, res) => {
   try {
     const { userId } = req.body;
     const { streamId } = req.params;
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
+
     const db = mongoose.connection.db;
     const livestreamsCollection = db.collection('livestreams');
-    
+
     const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
     if (!stream) {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
-    
+
     const viewers = stream.viewers || [];
     const updatedViewers = viewers.filter(v => v !== userId);
-    
+
     const updated = await livestreamsCollection.findOneAndUpdate(
       { _id: toObjectId(streamId) },
-      { 
-        $set: { 
+      {
+        $set: {
           viewers: updatedViewers,
           viewerCount: updatedViewers.length
         }
       },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[POST] /api/live-streams/:streamId/leave - User', userId, 'left stream');
     res.json({ success: true, data: updated.value });
   } catch (err) {
@@ -584,10 +596,10 @@ app.post('/api/live-streams/:streamId/comments', async (req, res) => {
     if (!userId || !text) {
       return res.status(400).json({ success: false, error: 'userId and text required' });
     }
-    
+
     const db = mongoose.connection.db;
     const liveStreamCommentsCollection = db.collection('livestream_comments');
-    
+
     const newComment = {
       streamId: req.params.streamId,
       userId,
@@ -599,9 +611,9 @@ app.post('/api/live-streams/:streamId/comments', async (req, res) => {
       likesCount: 0,
       reactions: {}
     };
-    
+
     const result = await liveStreamCommentsCollection.insertOne(newComment);
-    
+
     console.log('[POST] /api/live-streams/:streamId/comments - Comment added:', result.insertedId);
     return res.status(201).json({ success: true, id: result.insertedId, data: newComment });
   } catch (err) {
@@ -616,12 +628,12 @@ app.get('/api/live-streams/:streamId/comments', async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const liveStreamCommentsCollection = db.collection('livestream_comments');
-    
+
     const comments = await liveStreamCommentsCollection
       .find({ streamId: req.params.streamId })
       .sort({ createdAt: -1 })
       .toArray();
-    
+
     console.log('[GET] /api/live-streams/:streamId/comments - Found:', comments.length);
     res.json({ success: true, data: comments });
   } catch (err) {
@@ -636,33 +648,33 @@ app.patch('/api/live-streams/:streamId/comments/:commentId', async (req, res) =>
   try {
     const { userId, text } = req.body;
     const { streamId, commentId } = req.params;
-    
+
     if (!userId || !text) {
       return res.status(400).json({ success: false, error: 'userId and text required' });
     }
-    
+
     const db = mongoose.connection.db;
     const liveStreamCommentsCollection = db.collection('livestream_comments');
-    
-    const comment = await liveStreamCommentsCollection.findOne({ 
+
+    const comment = await liveStreamCommentsCollection.findOne({
       _id: toObjectId(commentId),
       streamId: streamId
     });
-    
+
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     if (comment.userId !== userId) {
       return res.status(403).json({ success: false, error: 'Unauthorized - can only edit own comments' });
     }
-    
+
     const updated = await liveStreamCommentsCollection.findOneAndUpdate(
       { _id: toObjectId(commentId) },
       { $set: { text, editedAt: new Date() } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[PATCH] /api/live-streams/:streamId/comments/:commentId - Updated:', commentId);
     res.json({ success: true, data: updated.value });
   } catch (err) {
@@ -677,29 +689,29 @@ app.delete('/api/live-streams/:streamId/comments/:commentId', async (req, res) =
   try {
     const { userId } = req.body;
     const { streamId, commentId } = req.params;
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
+
     const db = mongoose.connection.db;
     const liveStreamCommentsCollection = db.collection('livestream_comments');
-    
-    const comment = await liveStreamCommentsCollection.findOne({ 
+
+    const comment = await liveStreamCommentsCollection.findOne({
       _id: toObjectId(commentId),
       streamId: streamId
     });
-    
+
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     if (comment.userId !== userId) {
       return res.status(403).json({ success: false, error: 'Unauthorized - can only delete own comments' });
     }
-    
+
     await liveStreamCommentsCollection.deleteOne({ _id: toObjectId(commentId) });
-    
+
     console.log('[DELETE] /api/live-streams/:streamId/comments/:commentId - Deleted:', commentId);
     res.json({ success: true, message: 'Comment deleted' });
   } catch (err) {
@@ -714,34 +726,34 @@ app.post('/api/live-streams/:streamId/comments/:commentId/like', async (req, res
   try {
     const { userId } = req.body;
     const { streamId, commentId } = req.params;
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
-    
+
     const db = mongoose.connection.db;
     const liveStreamCommentsCollection = db.collection('livestream_comments');
-    
-    const comment = await liveStreamCommentsCollection.findOne({ 
+
+    const comment = await liveStreamCommentsCollection.findOne({
       _id: toObjectId(commentId)
     });
-    
+
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     const likes = comment.likes || [];
     if (likes.includes(userId)) {
       return res.status(400).json({ success: false, error: 'Already liked' });
     }
-    
+
     likes.push(userId);
     const updated = await liveStreamCommentsCollection.findOneAndUpdate(
       { _id: toObjectId(commentId) },
       { $set: { likes, likesCount: likes.length } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[POST] /api/live-streams/:streamId/comments/:commentId/like - User', userId, 'liked');
     res.json({ success: true, data: { likes: updated.value.likes, likesCount: updated.value.likesCount } });
   } catch (err) {
@@ -756,35 +768,35 @@ app.post('/api/live-streams/:streamId/comments/:commentId/reactions', async (req
   try {
     const { userId, reaction } = req.body;
     const { streamId, commentId } = req.params;
-    
+
     if (!userId || !reaction) {
       return res.status(400).json({ success: false, error: 'userId and reaction required' });
     }
-    
+
     const db = mongoose.connection.db;
     const liveStreamCommentsCollection = db.collection('livestream_comments');
-    
-    const comment = await liveStreamCommentsCollection.findOne({ 
+
+    const comment = await liveStreamCommentsCollection.findOne({
       _id: toObjectId(commentId)
     });
-    
+
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     const reactions = comment.reactions || {};
     reactions[reaction] = reactions[reaction] || [];
-    
+
     if (!reactions[reaction].includes(userId)) {
       reactions[reaction].push(userId);
     }
-    
+
     const updated = await liveStreamCommentsCollection.findOneAndUpdate(
       { _id: toObjectId(commentId) },
       { $set: { reactions } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[POST] /api/live-streams/:streamId/comments/:commentId/reactions - User', userId, 'reacted:', reaction);
     res.json({ success: true, data: { reactions: updated.value.reactions } });
   } catch (err) {
@@ -803,24 +815,24 @@ app.get('/api/status', (req, res) => res.json({ success: true, status: 'online' 
 app.post('/api/media/upload', async (req, res) => {
   try {
     const { file: fileBase64, fileName, image, path } = req.body;
-    
+
     // Support both { file, fileName } and { image, path } formats
     let mediaFile = fileBase64 || image;
     const mediaName = fileName || path || 'media';
-    
+
     console.log('[POST] /api/media/upload - Received request');
     console.log('[POST] /api/media/upload - Content-Type:', req.headers['content-type']);
     console.log('[POST] /api/media/upload - mediaFile (base64) length:', mediaFile?.length || 0);
     console.log('[POST] /api/media/upload - mediaName:', mediaName);
     console.log('[POST] /api/media/upload - req.file exists:', !!req.file);
-    
+
     // Support multipart/form-data with file upload
     if (!mediaFile && req.file) {
       // Convert buffer to base64 for Cloudinary
       mediaFile = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
       console.log('[POST] /api/media/upload - Using req.file buffer, size:', req.file.size, 'bytes');
     }
-    
+
     if (!mediaFile) {
       console.error('[POST] /api/media/upload - No file/image provided');
       return res.status(400).json({ success: false, error: 'No file/image provided' });
@@ -843,10 +855,10 @@ app.post('/api/media/upload', async (req, res) => {
     });
 
     console.log('[POST] /api/media/upload - ✅ Cloudinary upload successful:', result.secure_url);
-    return res.json({ 
-      success: true, 
-      data: { 
-        url: result.secure_url, 
+    return res.json({
+      success: true,
+      data: {
+        url: result.secure_url,
         fileName: mediaName,
         secureUrl: result.secure_url
       },
@@ -862,39 +874,76 @@ console.log('  ✅ /api/media/upload loaded (with Cloudinary)');
 
 // ============= INLINE ROUTES FOR MISSING ENDPOINTS =============
 
+const optionalVerifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return verifyToken(req, res, next);
+  }
+  return next();
+};
+
 // GET /api/conversations - Get conversations for current user
-app.get('/api/conversations', async (req, res) => {
+app.get('/api/conversations', verifyToken, async (req, res) => {
   try {
-    const userId = req.query.userId || req.headers['x-user-id'];
-    
+    const userIdFromToken = req.userId;
+    const userId = userIdFromToken;
+
     console.log('[GET] /api/conversations - Query userId:', userId);
-    
+
     // Return empty if no userId
     if (!userId) {
       console.warn('[GET] /api/conversations - No userId provided');
-      return res.json({ success: true, data: [] });
+      return res.status(401).json({ success: false, error: 'Unauthorized', data: [] });
     }
-    
+
     const db = mongoose.connection.db;
-    
+
+    // Resolve both Mongo _id and firebase uid for backward compatibility
+    const User = mongoose.model('User');
+    let mongoId = null;
+    let firebaseUid = null;
+    try {
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        const byId = await User.findById(userId).select('firebaseUid uid');
+        if (byId) {
+          mongoId = String(byId._id);
+          firebaseUid = byId.firebaseUid || byId.uid || null;
+        }
+      }
+
+      if (!mongoId) {
+        const byAlt = await User.findOne({ $or: [{ firebaseUid: userId }, { uid: userId }] }).select('firebaseUid uid');
+        if (byAlt) {
+          mongoId = String(byAlt._id);
+          firebaseUid = byAlt.firebaseUid || byAlt.uid || null;
+        }
+      }
+    } catch (e) {
+      console.warn('[GET] /api/conversations - Failed resolving user identifiers:', e.message);
+    }
+
+    const idsToMatch = [String(userId)];
+    if (mongoId && !idsToMatch.includes(mongoId)) idsToMatch.push(mongoId);
+    if (firebaseUid && !idsToMatch.includes(firebaseUid)) idsToMatch.push(String(firebaseUid));
+
     // Build query for conversations
-    const query = { 
+    const query = {
       $or: [
-        { userId1: userId }, 
-        { userId2: userId },
-        { participants: { $in: [userId] } }
+        { userId1: { $in: idsToMatch } },
+        { userId2: { $in: idsToMatch } },
+        { participants: { $in: idsToMatch } }
       ]
     };
-    
+
     console.log('[GET] /api/conversations - Query:', JSON.stringify(query));
-    
+
     // First, let's log ALL conversations in the database for debugging
     const allConversations = await db.collection('conversations').find({}).limit(5).toArray();
     console.log('[GET] Total conversations in DB:', allConversations.length);
     allConversations.forEach((conv, i) => {
       console.log(`  [${i}] participants:`, conv.participants, '| user in participants?', conv.participants?.includes(userId));
     });
-    
+
     // Query with index optimization
     const conversations = await db.collection('conversations')
       .find(query)
@@ -902,18 +951,107 @@ app.get('/api/conversations', async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(50)
       .toArray();
-    
-    console.log('[GET] /api/conversations - Found', conversations.length, 'conversations');
-    conversations.forEach((c, i) => {
+
+    // Normalize participant IDs to Mongo _id when possible (prevents mixed-id DMs)
+    try {
+      const participantSet = new Set();
+      for (const c of conversations) {
+        for (const p of (c?.participants || [])) participantSet.add(String(p));
+      }
+      const participantIds = Array.from(participantSet);
+      const objectIds = participantIds
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+
+      const usersCollection = db.collection('users');
+      const users = await usersCollection.find({
+        $or: [
+          { firebaseUid: { $in: participantIds } },
+          { uid: { $in: participantIds } },
+          objectIds.length ? { _id: { $in: objectIds } } : null
+        ].filter(Boolean)
+      }).project({ _id: 1, firebaseUid: 1, uid: 1 }).toArray();
+
+      const mapToMongo = new Map();
+      for (const u of users) {
+        const idStr = String(u._id);
+        mapToMongo.set(idStr, idStr);
+        if (u.firebaseUid) mapToMongo.set(String(u.firebaseUid), idStr);
+        if (u.uid) mapToMongo.set(String(u.uid), idStr);
+      }
+
+      for (const c of conversations) {
+        if (Array.isArray(c.participants)) {
+          c.participants = c.participants.map(p => mapToMongo.get(String(p)) || String(p));
+        }
+      }
+    } catch (e) {
+      console.warn('[GET] /api/conversations - Participant normalization skipped:', e.message);
+    }
+
+    const countUnreadForUser = (c) => {
+      const msgs = Array.isArray(c?.messages) ? c.messages : [];
+      let count = 0;
+      for (const m of msgs) {
+        const recipientId = m?.recipientId != null ? String(m.recipientId) : '';
+        const isForMe = recipientId && idsToMatch.some(id => String(id) === recipientId);
+        if (isForMe && m?.read === false) count += 1;
+      }
+      return count;
+    };
+
+    // Dedupe by participant pair so the same user only appears once in inbox
+    const dedupedByPair = new Map();
+    const getSortTime = (c) => {
+      const t = c?.updatedAt || c?.lastMessageAt || c?.lastMessageTime || c?.createdAt;
+      const d = t?.toDate ? t.toDate() : (t ? new Date(t) : null);
+      return d && !Number.isNaN(d.getTime()) ? d.getTime() : 0;
+    };
+
+    for (const conv of conversations) {
+      const participants = Array.isArray(conv?.participants)
+        ? conv.participants.map(p => String(p)).sort()
+        : [];
+      const key = participants.length > 0 ? participants.join('|') : String(conv?._id || Math.random());
+
+      const unreadForThisDoc = countUnreadForUser(conv);
+
+      if (participants.length === 2) {
+        conv.conversationId = `${participants[0]}_${participants[1]}`;
+        conv.participants = participants;
+      }
+
+      const existing = dedupedByPair.get(key);
+      if (!existing) {
+        conv.unreadCount = unreadForThisDoc;
+        dedupedByPair.set(key, conv);
+      } else {
+        const aggregatedUnread = (existing?.unreadCount || 0) + unreadForThisDoc;
+        const existingTime = getSortTime(existing);
+        const currentTime = getSortTime(conv);
+        if (currentTime >= existingTime) {
+          conv.unreadCount = aggregatedUnread;
+          dedupedByPair.set(key, conv);
+        } else {
+          existing.unreadCount = aggregatedUnread;
+        }
+      }
+    }
+
+    const dedupedConversations = Array.from(dedupedByPair.values());
+    dedupedConversations.sort((a, b) => getSortTime(b) - getSortTime(a));
+
+    console.log('[GET] /api/conversations - Found', dedupedConversations.length, 'conversations (deduped)');
+    dedupedConversations.forEach((c, i) => {
       console.log(`  [${i}] participants:`, c.participants, '| lastMessage:', c.lastMessage?.substring(0, 30));
     });
-    
+
     // Add currentUserId to each conversation for frontend compatibility
-    const conversationsWithUserId = conversations.map(conv => ({
+    const conversationsWithUserId = dedupedConversations.map(conv => ({
       ...conv,
       currentUserId: userId
     }));
-    
+
     res.json({ success: true, data: conversationsWithUserId || [] });
   } catch (err) {
     console.error('[GET] /api/conversations - Error:', err.message);
@@ -928,11 +1066,11 @@ app.get('/api/debug/conversations-count', async (req, res) => {
     const db = mongoose.connection.db;
     const count = await db.collection('conversations').countDocuments({});
     const capitalizedCount = await db.collection('Conversation').countDocuments({}).catch(() => 0);
-    
+
     const sample = await db.collection('conversations').find({}).limit(3).toArray();
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       'conversations (lowercase)': count,
       'Conversation (capitalized)': capitalizedCount,
       'sample documents': sample
@@ -948,9 +1086,9 @@ app.get('/api/debug/messages-count', async (req, res) => {
     const db = mongoose.connection.db;
     const count = await db.collection('messages').countDocuments({});
     const sample = await db.collection('messages').find({}).sort({ createdAt: -1 }).limit(3).toArray();
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       'total messages': count,
       'recent messages': sample.map(m => ({ ...m, text: m.text?.substring(0, 30) }))
     });
@@ -963,11 +1101,11 @@ app.get('/api/debug/messages-count', async (req, res) => {
 app.post('/api/test/create-conversation', async (req, res) => {
   try {
     const { userId1, userId2, lastMessage } = req.body;
-    
+
     if (!userId1 || !userId2) {
       return res.status(400).json({ success: false, error: 'userId1 and userId2 required' });
     }
-    
+
     const db = mongoose.connection.db;
     const convo = {
       userId1,
@@ -978,10 +1116,10 @@ app.post('/api/test/create-conversation', async (req, res) => {
       lastMessage: lastMessage || 'Hello!',
       lastMessageTime: new Date()
     };
-    
+
     const result = await db.collection('conversations').insertOne(convo);
     console.log('✅ TEST: Created conversation:', result.insertedId);
-    
+
     res.json({ success: true, data: { _id: result.insertedId, ...convo } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1121,15 +1259,15 @@ app.get('/api/conversations/:conversationId/messages/:messageId', async (req, re
   try {
     const db = mongoose.connection.db;
     const messagesCollection = db.collection('messages');
-    
-    const message = await messagesCollection.findOne({ 
+
+    const message = await messagesCollection.findOne({
       _id: toObjectId(req.params.messageId)
     });
-    
+
     if (!message) {
       return res.status(404).json({ success: false, error: 'Message not found' });
     }
-    
+
     res.json({ success: true, data: message });
   } catch (err) {
     console.error('[GET] /api/conversations/:conversationId/messages/:messageId error:', err.message);
@@ -1343,19 +1481,19 @@ app.post('/api/conversations/:conversationId/messages/:messageId/replies', async
   try {
     const { senderId, text } = req.body;
     const { messageId } = req.params;
-    
+
     if (!senderId || !text) {
       return res.status(400).json({ success: false, error: 'senderId and text required' });
     }
-    
+
     const db = mongoose.connection.db;
     const messagesCollection = db.collection('messages');
-    
+
     const parentMessage = await messagesCollection.findOne({ _id: toObjectId(messageId) });
     if (!parentMessage) {
       return res.status(404).json({ success: false, error: 'Message not found' });
     }
-    
+
     const reply = {
       _id: new mongoose.Types.ObjectId(),
       senderId,
@@ -1363,16 +1501,16 @@ app.post('/api/conversations/:conversationId/messages/:messageId/replies', async
       createdAt: new Date(),
       reactions: {}
     };
-    
+
     const replies = parentMessage.replies || [];
     replies.push(reply);
-    
+
     const updated = await messagesCollection.findOneAndUpdate(
       { _id: toObjectId(messageId) },
       { $set: { replies } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[POST] /api/conversations/:conversationId/messages/:messageId/replies - Added reply:', reply._id);
     res.status(201).json({ success: true, id: reply._id, data: reply });
   } catch (err) {
@@ -1466,31 +1604,103 @@ app.get('/api/sections', async (req, res) => {
 });
 console.log('  ✅ /api/sections loaded');
 
+// GET /api/users/search - Search users OR return recommendations (MUST be before /api/users/:uid)
+app.get('/api/users/search', async (req, res) => {
+  try {
+    const { q, limit = 20 } = req.query;
+    const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 20, 50));
+
+    const db = mongoose.connection?.db;
+    if (!db) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const usersCollection = db.collection('users');
+
+    // If q is empty, return a small list of recent users for recommendations
+    const qStr = typeof q === 'string' ? q.trim() : '';
+    if (!qStr) {
+      const users = await usersCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .limit(parsedLimit)
+        .project({
+          _id: 1,
+          firebaseUid: 1,
+          uid: 1,
+          email: 1,
+          displayName: 1,
+          name: 1,
+          username: 1,
+          avatar: 1,
+          photoURL: 1,
+          bio: 1,
+          isPrivate: 1,
+          createdAt: 1
+        })
+        .toArray();
+
+      return res.json({ success: true, data: Array.isArray(users) ? users : [] });
+    }
+
+    const regex = new RegExp(qStr, 'i');
+    const users = await usersCollection
+      .find({
+        $or: [
+          { displayName: regex },
+          { name: regex },
+          { username: regex },
+          { email: regex },
+        ]
+      })
+      .limit(parsedLimit)
+      .project({
+        _id: 1,
+        firebaseUid: 1,
+        uid: 1,
+        email: 1,
+        displayName: 1,
+        name: 1,
+        username: 1,
+        avatar: 1,
+        photoURL: 1,
+        bio: 1,
+        isPrivate: 1,
+        createdAt: 1
+      })
+      .toArray();
+
+    return res.json({ success: true, data: Array.isArray(users) ? users : [] });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
 // GET /api/users/:uid - Get user profile
 app.get('/api/users/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
     console.log('[GET] /api/users/:uid - Looking for user:', uid);
-    
+
     const User = mongoose.model('User');
-    
+
     // Build query - check firebaseUid first, then uid field, then try ObjectId if valid
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
-    
+
     // Only add _id if it's a valid MongoDB ObjectId
     if (mongoose.Types.ObjectId.isValid(uid)) {
       query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
-    
+
     console.log('[GET] /api/users/:uid - Query:', JSON.stringify(query));
-    
+
     const user = await User.findOne(query);
-    
+
     if (!user) {
       console.warn('[GET] /api/users/:uid - User not found for:', uid, ' - returning placeholder');
       // Return placeholder instead of 404
-      return res.json({ 
-        success: true, 
+      return res.json({
+        success: true,
         data: {
           _id: uid,
           uid: uid,
@@ -1506,7 +1716,7 @@ app.get('/api/users/:uid', async (req, res) => {
         }
       });
     }
-    
+
     // Ensure user has all expected fields
     const userData = {
       _id: user._id,
@@ -1533,7 +1743,7 @@ app.get('/api/users/:uid', async (req, res) => {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     };
-    
+
     console.log('[GET] /api/users/:uid - Returning user data');
     return res.json({ success: true, data: userData });
   } catch (err) {
@@ -1549,13 +1759,13 @@ app.get('/api/users/:userId/posts', async (req, res) => {
   try {
     const { userId } = req.params;
     const { requesterUserId } = req.query;
-    
+
     const db = mongoose.connection.db;
-    
+
     // Get user to check privacy
     const usersCollection = db.collection('users');
     const targetUser = await usersCollection.findOne({ _id: toObjectId(userId) });
-    
+
     // Check if user is private
     if (targetUser?.isPrivate) {
       // If user is private, only owner or followers can see posts
@@ -1563,7 +1773,7 @@ app.get('/api/users/:userId/posts', async (req, res) => {
         console.log('[GET] /api/users/:userId/posts - User is private, access denied');
         return res.json({ success: true, data: [], message: 'User profile is private' });
       }
-      
+
       if (requesterUserId !== userId) {
         // Check if requester is follower
         const followsCollection = db.collection('follows');
@@ -1571,20 +1781,20 @@ app.get('/api/users/:userId/posts', async (req, res) => {
           followerId: toObjectId(requesterUserId),
           followingId: toObjectId(userId)
         });
-        
+
         if (!isFollower) {
           console.log('[GET] /api/users/:userId/posts - User is private, requester not follower');
           return res.json({ success: true, data: [], message: 'User profile is private' });
         }
       }
     }
-    
+
     const postsCollection = db.collection('posts');
     const posts = await postsCollection
       .find({ userId: userId })
       .sort({ createdAt: -1 })
       .toArray();
-    
+
     console.log('[GET] /api/users/:userId/posts - Returned', posts?.length || 0, 'posts');
     res.json({ success: true, data: posts || [] });
   } catch (err) {
@@ -1599,18 +1809,18 @@ app.get('/api/users/:userId/sections', async (req, res) => {
   try {
     const { userId } = req.params;
     const { requesterUserId } = req.query;
-    
+
     console.log('[GET] /api/users/:userId/sections - userId:', userId, 'requesterUserId:', requesterUserId);
-    
+
     const db = mongoose.connection.db;
     const sectionsCollection = db.collection('sections');
     const sections = await sectionsCollection
       .find({ userId: userId })
       .sort({ order: 1 })
       .toArray();
-    
+
     console.log('[GET] /api/users/:userId/sections - Found', sections.length, 'sections for user:', userId);
-    
+
     res.json({ success: true, data: sections || [] });
   } catch (err) {
     console.error('[GET] /api/users/:userId/sections error:', err.message);
@@ -1624,14 +1834,14 @@ app.get('/api/users/:userId/highlights', async (req, res) => {
   try {
     const { userId } = req.params;
     const { requesterUserId } = req.query;
-    
+
     const db = mongoose.connection.db;
     const highlightsCollection = db.collection('highlights');
     const highlights = await highlightsCollection
       .find({ userId: userId })
       .sort({ createdAt: -1 })
       .toArray();
-    
+
     res.json({ success: true, data: highlights || [] });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message, data: [] });
@@ -1644,14 +1854,14 @@ app.get('/api/users/:userId/stories', async (req, res) => {
   try {
     const { userId } = req.params;
     const { requesterUserId } = req.query;
-    
+
     const db = mongoose.connection.db;
     const storiesCollection = db.collection('stories');
     const stories = await storiesCollection
       .find({ userId: userId })
       .sort({ createdAt: -1 })
       .toArray();
-    
+
     res.json({ success: true, data: stories || [] });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message, data: [] });
@@ -1762,37 +1972,48 @@ console.log('  ✅ /api/users/:userId/sections/:sectionId (DELETE) loaded');
 // Inline fallback auth routes to avoid 404 if router fails to load
 app.post('/api/auth/login-firebase', async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ success: false, error: 'Database not connected (MONGO_URI missing or unreachable)' });
+    }
+
     const { firebaseUid, email, displayName, avatar } = req.body || {};
     if (!firebaseUid || !email) {
       return res.status(400).json({ success: false, error: 'Firebase UID and email required' });
     }
 
     const User = mongoose.model('User');
-    let user = await User.findOne({ firebaseUid });
+    const normalizedEmail = String(email).toLowerCase().trim();
+    let user = await User.findOne({ $or: [{ firebaseUid }, { email: normalizedEmail }] });
+
+    if (user?.firebaseUid && user.firebaseUid !== firebaseUid) {
+      return res.status(409).json({ success: false, error: 'Email is already linked to another account' });
+    }
 
     if (!user) {
       user = new User({
         firebaseUid,
-        email,
-        displayName: displayName || email.split('@')[0],
+        email: normalizedEmail,
+        displayName: displayName || normalizedEmail.split('@')[0],
         avatar: avatar || null,
       });
       await user.save();
     } else {
+      user.firebaseUid = user.firebaseUid || firebaseUid;
+      user.email = user.email || normalizedEmail;
       user.displayName = displayName || user.displayName;
       user.avatar = avatar || user.avatar;
       user.updatedAt = new Date();
       await user.save();
     }
 
-    const token = jwt.sign({ userId: user._id, firebaseUid, email }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user._id, firebaseUid, email: normalizedEmail }, JWT_SECRET, { expiresIn: '7d' });
     return res.json({
       success: true,
       token,
       user: {
         id: user._id,
         firebaseUid,
-        email,
+        email: normalizedEmail,
         displayName: user.displayName,
         avatar: user.avatar,
       },
@@ -1805,39 +2026,50 @@ app.post('/api/auth/login-firebase', async (req, res) => {
 
 app.post('/api/auth/register-firebase', async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ success: false, error: 'Database not connected (MONGO_URI missing or unreachable)' });
+    }
+
     const { firebaseUid, email, displayName, avatar } = req.body || {};
     if (!firebaseUid || !email) {
       return res.status(400).json({ success: false, error: 'Firebase UID and email required' });
     }
 
     const User = mongoose.model('User');
-    let user = await User.findOne({ firebaseUid });
+    const normalizedEmail = String(email).toLowerCase().trim();
+    let user = await User.findOne({ $or: [{ firebaseUid }, { email: normalizedEmail }] });
+
+    if (user?.firebaseUid && user.firebaseUid !== firebaseUid) {
+      return res.status(409).json({ success: false, error: 'Email is already linked to another account' });
+    }
 
     if (!user) {
       user = new User({
         firebaseUid,
-        email,
-        displayName: displayName || email.split('@')[0],
+        email: normalizedEmail,
+        displayName: displayName || normalizedEmail.split('@')[0],
         avatar: avatar || null,
         followers: 0,
         following: 0,
       });
       await user.save();
     } else {
+      user.firebaseUid = user.firebaseUid || firebaseUid;
+      user.email = user.email || normalizedEmail;
       user.displayName = displayName || user.displayName;
       user.avatar = avatar || user.avatar;
       user.updatedAt = new Date();
       await user.save();
     }
 
-    const token = jwt.sign({ userId: user._id, firebaseUid, email }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user._id, firebaseUid, email: normalizedEmail }, JWT_SECRET, { expiresIn: '7d' });
     return res.json({
       success: true,
       token,
       user: {
         id: user._id,
         firebaseUid,
-        email,
+        email: normalizedEmail,
         displayName: user.displayName,
         avatar: user.avatar,
       },
@@ -1899,14 +2131,14 @@ app.put('/api/users/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
     const { displayName, name, bio, website, location, phone, interests, avatar, photoURL, isPrivate } = req.body;
-    
+
     const User = mongoose.model('User');
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
-    
+
     if (mongoose.Types.ObjectId.isValid(uid)) {
       query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
-    
+
     const updateData = {
       displayName: displayName || name,
       name: name || displayName,
@@ -1920,13 +2152,13 @@ app.put('/api/users/:uid', async (req, res) => {
       isPrivate: isPrivate !== undefined ? isPrivate : false,
       updatedAt: new Date(),
     };
-    
+
     const user = await User.findOneAndUpdate(query, { $set: updateData }, { new: true });
-    
+
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
-    
+
     return res.json({ success: true, data: user });
   } catch (err) {
     console.error('[Inline] PUT /api/users/:uid error:', err.message);
@@ -1939,14 +2171,14 @@ app.patch('/api/users/:uid', async (req, res) => {
   try {
     const { uid } = req.params;
     const { displayName, name, bio, website, location, phone, interests, avatar, photoURL, isPrivate } = req.body;
-    
+
     const User = mongoose.model('User');
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
-    
+
     if (mongoose.Types.ObjectId.isValid(uid)) {
       query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
-    
+
     const updateData = {
       displayName: displayName || name,
       name: name || displayName,
@@ -1960,13 +2192,13 @@ app.patch('/api/users/:uid', async (req, res) => {
       isPrivate: isPrivate !== undefined ? isPrivate : false,
       updatedAt: new Date(),
     };
-    
+
     const user = await User.findOneAndUpdate(query, { $set: updateData }, { new: true });
-    
+
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
-    
+
     return res.json({ success: true, data: user });
   } catch (err) {
     console.error('[Inline] PATCH /api/users/:uid error:', err.message);
@@ -2068,12 +2300,12 @@ try {
   console.warn('  ⚠️ /api/follow error:', err.message);
 }
 
-// Saved posts routes
+// Saved posts routes (under /api/users to match frontend: /users/:userId/saved)
 try {
-  app.use('/api/saved', require('../routes/saved'));
-  console.log('  ✅ /api/saved loaded');
+  app.use('/api/users', require('../routes/saved'));
+  console.log('  ✅ /api/users (saved routes) loaded');
 } catch (err) {
-  console.warn('  ⚠️ /api/saved error:', err.message);
+  console.warn('  ⚠️ /api/users (saved routes) error:', err.message);
 }
 
 // Moderation routes
@@ -2086,10 +2318,10 @@ try {
 
 // Notifications routes
 try {
-  app.use('/api/notifications', require('../routes/notification'));
-  console.log('  ✅ /api/notifications loaded');
+  app.use('/api/notifications-legacy', require('../routes/notification'));
+  console.log('  ✅ /api/notifications-legacy loaded');
 } catch (err) {
-  console.warn('  ⚠️ /api/notifications error:', err.message);
+  console.warn('  ⚠️ /api/notifications-legacy error:', err.message);
 }
 
 // Upload routes
@@ -2115,13 +2347,13 @@ app.get('/api/posts/:postId/comments', async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
-    
+
     // Convert postId to string for comparison (MongoDB stores IDs as strings in some cases)
     const postIdStr = req.params.postId;
     const postIdObj = toObjectId(postIdStr);
-    
+
     const comments = await commentsCollection
-      .find({ 
+      .find({
         $or: [
           { postId: postIdStr },
           { postId: postIdObj }
@@ -2129,7 +2361,7 @@ app.get('/api/posts/:postId/comments', async (req, res) => {
       })
       .sort({ createdAt: -1 })
       .toArray();
-    
+
     res.json({ success: true, data: comments });
   } catch (err) {
     console.error('[GET] /api/posts/:postId/comments error:', err.message);
@@ -2141,13 +2373,14 @@ app.get('/api/posts/:postId/comments', async (req, res) => {
 app.post('/api/posts/:postId/comments', async (req, res) => {
   try {
     const { userId, text, userName, userAvatar } = req.body;
+
     if (!userId || !text) {
       return res.status(400).json({ success: false, error: 'Missing userId or text' });
     }
-    
+
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
-    
+
     const newComment = {
       postId: req.params.postId,  // Store as string, DB will handle it
       userId,
@@ -2161,28 +2394,51 @@ app.post('/api/posts/:postId/comments', async (req, res) => {
       reactions: {},
       replies: []
     };
-    
+
     const result = await commentsCollection.insertOne(newComment);
-    
+
     // Update post's commentCount
+    let updatedCommentCount = 0;
+    let postOwnerId = null;
     try {
       const Post = mongoose.model('Post');
       const post = await Post.findById(req.params.postId);
       if (post) {
+        postOwnerId = post.userId ? String(post.userId) : null;
         post.commentsCount = (post.commentsCount || 0) + 1;
         post.commentCount = (post.commentCount || 0) + 1;
         await post.save();
-        console.log('[POST] /api/posts/:postId/comments - Updated post commentCount to:', post.commentsCount);
+        updatedCommentCount = post.commentCount;
+        console.log('[POST] /api/posts/:postId/comments - Updated post commentCount to:', post.commentCount);
       }
     } catch (err) {
-      console.log('[POST] /api/posts/:postId/comments - Could not update commentCount:', err.message);
+      console.error('[POST] /api/posts/:postId/comments - Could not update commentCount:', err.message);
     }
-    
+
+    // Best-effort: create comment notification for post owner
+    try {
+      if (postOwnerId && postOwnerId !== String(userId)) {
+        const notificationsCollection = db.collection('notifications');
+        await notificationsCollection.insertOne({
+          recipientId: String(postOwnerId),
+          senderId: String(userId),
+          type: 'comment',
+          postId: String(req.params.postId),
+          message: 'commented on your post',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+    } catch (e) {
+      console.warn('[POST] /api/posts/:postId/comments - Skipped notification:', e.message);
+    }
+
     console.log('[POST] /api/posts/:postId/comments - Created comment:', result.insertedId);
-    return res.status(201).json({ 
-      success: true, 
-      id: result.insertedId, 
-      data: { ...newComment, _id: result.insertedId } 
+    return res.status(201).json({
+      success: true,
+      id: result.insertedId,
+      data: { ...newComment, _id: result.insertedId },
+      commentCount: updatedCommentCount // Return updated count
     });
   } catch (err) {
     console.error('[POST] /api/posts/:postId/comments error:', err.message);
@@ -2196,39 +2452,39 @@ app.patch('/api/posts/:postId/comments/:commentId', async (req, res) => {
   try {
     const { userId, text } = req.body;
     const { postId, commentId } = req.params;
-    
+
     if (!userId || !text) {
       return res.status(400).json({ success: false, error: 'Missing userId or text' });
     }
-    
+
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
-    
+
     // Check if comment exists and belongs to user
-    const comment = await commentsCollection.findOne({ 
+    const comment = await commentsCollection.findOne({
       _id: toObjectId(commentId),
       postId: postId
     });
-    
+
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     if (comment.userId !== userId) {
       return res.status(403).json({ success: false, error: 'Unauthorized - you can only edit your own comments' });
     }
-    
+
     const updated = await commentsCollection.findOneAndUpdate(
       { _id: toObjectId(commentId) },
-      { 
-        $set: { 
-          text, 
+      {
+        $set: {
+          text,
           editedAt: new Date()
         }
       },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[PATCH] /api/posts/:postId/comments/:commentId - Updated:', commentId);
     res.json({ success: true, data: updated.value });
   } catch (err) {
@@ -2243,30 +2499,30 @@ app.delete('/api/posts/:postId/comments/:commentId', async (req, res) => {
   try {
     const { userId } = req.body;
     const { postId, commentId } = req.params;
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
-    
+
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
-    
+
     // Check if comment exists and belongs to user
-    const comment = await commentsCollection.findOne({ 
+    const comment = await commentsCollection.findOne({
       _id: toObjectId(commentId),
       postId: postId
     });
-    
+
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     if (comment.userId !== userId) {
       return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own comments' });
     }
-    
+
     await commentsCollection.deleteOne({ _id: toObjectId(commentId) });
-    
+
     console.log('[DELETE] /api/posts/:postId/comments/:commentId - Deleted:', commentId);
     res.json({ success: true, message: 'Comment deleted' });
   } catch (err) {
@@ -2281,31 +2537,31 @@ app.post('/api/posts/:postId/comments/:commentId/like', async (req, res) => {
   try {
     const { userId } = req.body;
     const { postId, commentId } = req.params;
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
-    
+
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
-    
+
     const comment = await commentsCollection.findOne({ _id: toObjectId(commentId) });
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     const likes = comment.likes || [];
     if (likes.includes(userId)) {
       return res.status(400).json({ success: false, error: 'Already liked' });
     }
-    
+
     likes.push(userId);
     const updated = await commentsCollection.findOneAndUpdate(
       { _id: toObjectId(commentId) },
       { $set: { likes, likesCount: likes.length } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[POST] /api/posts/:postId/comments/:commentId/like - User', userId, 'liked comment');
     res.json({ success: true, data: { likes: updated.value.likes, likesCount: updated.value.likesCount } });
   } catch (err) {
@@ -2320,32 +2576,32 @@ app.post('/api/posts/:postId/comments/:commentId/reactions', async (req, res) =>
   try {
     const { userId, reaction } = req.body;
     const { postId, commentId } = req.params;
-    
+
     if (!userId || !reaction) {
       return res.status(400).json({ success: false, error: 'userId and reaction required' });
     }
-    
+
     const db = mongoose.connection.db;
     const commentsCollection = db.collection('comments');
-    
+
     const comment = await commentsCollection.findOne({ _id: toObjectId(commentId) });
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
-    
+
     const reactions = comment.reactions || {};
     reactions[reaction] = reactions[reaction] || [];
-    
+
     if (!reactions[reaction].includes(userId)) {
       reactions[reaction].push(userId);
     }
-    
+
     const updated = await commentsCollection.findOneAndUpdate(
       { _id: toObjectId(commentId) },
       { $set: { reactions } },
       { returnDocument: 'after' }
     );
-    
+
     console.log('[POST] /api/posts/:postId/comments/:commentId/reactions - User', userId, 'reacted:', reaction);
     res.json({ success: true, data: { reactions: updated.value.reactions } });
   } catch (err) {
@@ -2360,33 +2616,52 @@ app.post('/api/posts/:postId/like', async (req, res) => {
   try {
     const { postId } = req.params;
     const { userId } = req.body;
-    
+
     console.log('[POST] /api/posts/:postId/like called - postId:', postId, 'userId:', userId);
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
-    
+
     const Post = mongoose.model('Post');
     const post = await Post.findById(postId);
-    
+
     console.log('[POST] /api/posts/:postId/like - Found post:', !!post, 'existing likes:', post?.likes?.length || 0);
-    
+
     if (!post) {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
-    
+
     if (!post.likes) post.likes = [];
-    
+
     // Check if already liked
     if (post.likes.includes(userId)) {
       console.log('[POST] /api/posts/:postId/like - Already liked');
       return res.status(400).json({ success: false, error: 'Already liked' });
     }
-    
+
     post.likes.push(userId);
     const savedPost = await post.save();
-    
+
+    // Best-effort: create like notification for post owner
+    try {
+      const postOwnerId = post.userId ? String(post.userId) : null;
+      if (postOwnerId && postOwnerId !== String(userId)) {
+        const db = mongoose.connection.db;
+        await db.collection('notifications').insertOne({
+          recipientId: String(postOwnerId),
+          senderId: String(userId),
+          type: 'like',
+          postId: String(postId),
+          message: 'liked your post',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+    } catch (e) {
+      console.warn('[POST] /api/posts/:postId/like - Skipped notification:', e.message);
+    }
+
     console.log('[POST] /api/posts/:postId/like - User', userId, 'liked post', postId, 'new total:', savedPost.likes.length);
     return res.json({ success: true, data: { likes: savedPost.likes, total: savedPost.likes.length } });
   } catch (err) {
@@ -2401,31 +2676,31 @@ app.delete('/api/posts/:postId/like', async (req, res) => {
   try {
     const { postId } = req.params;
     const { userId } = req.body;
-    
+
     console.log('[DELETE] /api/posts/:postId/like called - postId:', postId, 'userId:', userId);
-    
+
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
-    
+
     const Post = mongoose.model('Post');
     const post = await Post.findById(postId);
-    
+
     if (!post) {
       return res.status(404).json({ success: false, error: 'Post not found' });
     }
-    
+
     if (!post.likes) post.likes = [];
-    
+
     // Check if liked
     if (!post.likes.includes(userId)) {
       console.log('[DELETE] /api/posts/:postId/like - Not liked');
       return res.status(400).json({ success: false, error: 'Not liked' });
     }
-    
+
     post.likes = post.likes.filter(id => id !== userId);
     const savedPost = await post.save();
-    
+
     console.log('[DELETE] /api/posts/:postId/like - User', userId, 'unliked post', postId, 'new total:', savedPost.likes.length);
     return res.json({ success: true, data: { likes: savedPost.likes, total: savedPost.likes.length } });
   } catch (err) {
@@ -2440,28 +2715,28 @@ app.patch('/api/users/:uid/privacy', async (req, res) => {
   try {
     const { uid } = req.params;
     const { isPrivate } = req.body;
-    
+
     if (isPrivate === undefined) {
       return res.status(400).json({ success: false, error: 'isPrivate is required' });
     }
-    
+
     const User = mongoose.model('User');
     const query = { $or: [{ firebaseUid: uid }, { uid }] };
-    
+
     if (mongoose.Types.ObjectId.isValid(uid)) {
       query.$or.push({ _id: new mongoose.Types.ObjectId(uid) });
     }
-    
+
     const user = await User.findOneAndUpdate(
       query,
       { $set: { isPrivate, updatedAt: new Date() } },
       { new: true }
     );
-    
+
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
-    
+
     return res.json({ success: true, data: { isPrivate: user.isPrivate } });
   } catch (err) {
     console.error('[PATCH] /api/users/:uid/privacy error:', err.message);
@@ -2474,31 +2749,31 @@ console.log('  ✅ /api/users/:uid/privacy loaded');
 app.post('/api/users/:userId/block/:blockUserId', async (req, res) => {
   try {
     const { userId, blockUserId } = req.params;
-    
+
     if (userId === blockUserId) {
       return res.status(400).json({ success: false, error: 'Cannot block yourself' });
     }
-    
+
     const db = mongoose.connection.db;
     const blocksCollection = db.collection('blocks');
-    
+
     // Check if already blocked
     const existing = await blocksCollection.findOne({
       blockerId: toObjectId(userId),
       blockedId: toObjectId(blockUserId)
     });
-    
+
     if (existing) {
       return res.status(400).json({ success: false, error: 'User already blocked' });
     }
-    
+
     // Add block
     const result = await blocksCollection.insertOne({
       blockerId: toObjectId(userId),
       blockedId: toObjectId(blockUserId),
       createdAt: new Date()
     });
-    
+
     console.log('[POST] /api/users/:userId/block/:blockUserId - Blocked user:', blockUserId);
     res.status(201).json({ success: true, data: { blockId: result.insertedId } });
   } catch (err) {
@@ -2512,19 +2787,19 @@ console.log('  ✅ /api/users/:userId/block/:blockUserId (POST) loaded');
 app.delete('/api/users/:userId/block/:blockUserId', async (req, res) => {
   try {
     const { userId, blockUserId } = req.params;
-    
+
     const db = mongoose.connection.db;
     const blocksCollection = db.collection('blocks');
-    
+
     const result = await blocksCollection.deleteOne({
       blockerId: toObjectId(userId),
       blockedId: toObjectId(blockUserId)
     });
-    
+
     if (result.deletedCount === 0) {
       return res.status(404).json({ success: false, error: 'Block not found' });
     }
-    
+
     console.log('[DELETE] /api/users/:userId/block/:blockUserId - Unblocked user:', blockUserId);
     res.status(200).json({ success: true, message: 'User unblocked' });
   } catch (err) {
@@ -2539,24 +2814,24 @@ app.post('/api/posts/:postId/report', async (req, res) => {
   try {
     const { postId } = req.params;
     const { userId, reason, details } = req.body;
-    
+
     if (!userId || !reason) {
       return res.status(400).json({ success: false, error: 'userId and reason required' });
     }
-    
+
     const db = mongoose.connection.db;
     const reportsCollection = db.collection('reports');
-    
+
     // Check if already reported by this user
     const existing = await reportsCollection.findOne({
       reporterId: toObjectId(userId),
       postId: toObjectId(postId)
     });
-    
+
     if (existing) {
       return res.status(400).json({ success: false, error: 'Already reported' });
     }
-    
+
     const result = await reportsCollection.insertOne({
       postId: toObjectId(postId),
       reporterId: toObjectId(userId),
@@ -2565,7 +2840,7 @@ app.post('/api/posts/:postId/report', async (req, res) => {
       status: 'pending',
       createdAt: new Date()
     });
-    
+
     console.log('[POST] /api/posts/:postId/report - Report created:', result.insertedId);
     res.status(201).json({ success: true, data: { reportId: result.insertedId } });
   } catch (err) {
@@ -2580,28 +2855,28 @@ app.post('/api/users/:userId/report', async (req, res) => {
   try {
     const { userId } = req.params;
     const { reporterId, reason, details } = req.body;
-    
+
     if (!reporterId || !reason) {
       return res.status(400).json({ success: false, error: 'reporterId and reason required' });
     }
-    
+
     if (userId === reporterId) {
       return res.status(400).json({ success: false, error: 'Cannot report yourself' });
     }
-    
+
     const db = mongoose.connection.db;
     const userReportsCollection = db.collection('user_reports');
-    
+
     // Check if already reported
     const existing = await userReportsCollection.findOne({
       reporterId: toObjectId(reporterId),
       userId: toObjectId(userId)
     });
-    
+
     if (existing) {
       return res.status(400).json({ success: false, error: 'Already reported' });
     }
-    
+
     const result = await userReportsCollection.insertOne({
       userId: toObjectId(userId),
       reporterId: toObjectId(reporterId),
@@ -2610,7 +2885,7 @@ app.post('/api/users/:userId/report', async (req, res) => {
       status: 'pending',
       createdAt: new Date()
     });
-    
+
     console.log('[POST] /api/users/:userId/report - User report created:', result.insertedId);
     res.status(201).json({ success: true, data: { reportId: result.insertedId } });
   } catch (err) {
@@ -2624,10 +2899,10 @@ console.log('  ✅ /api/users/:userId/report (POST) loaded');
 app.get('/api/users/:userId/profile-url', async (req, res) => {
   try {
     const { userId } = req.params;
-    
+
     // Generate profile URL (assuming frontend domain)
     const profileUrl = `https://trave-social.expo.dev/profile/${userId}`;
-    
+
     console.log('[GET] /api/users/:userId/profile-url - Generated:', profileUrl);
     res.json({ success: true, data: { profileUrl, userId } });
   } catch (err) {
@@ -2638,36 +2913,56 @@ app.get('/api/users/:userId/profile-url', async (req, res) => {
 console.log('  ✅ /api/users/:userId/profile-url (GET) loaded');
 
 // GET /api/notifications/:userId - Get user notifications
-app.get('/api/notifications/:userId', async (req, res) => {
+app.get('/api/notifications/:userId', verifyToken, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = String(req.userId || '');
+    const firebaseUidFromToken = req.user?.firebaseUid;
+
     const { limit = 50, skip = 0 } = req.query;
-    
-    console.log('[GET] /api/notifications/:userId - userId:', userId);
-    
-    // Validate ObjectId
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      console.log('[GET] /api/notifications/:userId - Invalid userId format');
-      return res.json({ success: true, data: [], total: 0, message: 'Invalid userId' });
-    }
-    
+
+    console.log('[GET] /api/notifications/:userId - userId(from token):', userId);
+
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
-    
-    const objId = toObjectId(userId);
-    console.log('[GET] /api/notifications/:userId - Query with:', { recipientId: objId });
-    
+
+    const recipientIds = [String(userId)];
+    if (firebaseUidFromToken) recipientIds.push(String(firebaseUidFromToken));
+    const recipientObjId = mongoose.Types.ObjectId.isValid(userId) ? toObjectId(userId) : null;
+
+    const recipientQuery = {
+      $in: [
+        ...recipientIds,
+        ...(recipientObjId ? [recipientObjId] : [])
+      ]
+    };
+
+    console.log('[GET] /api/notifications/:userId - Query with:', { recipientId: recipientQuery });
+
     const notifications = await notificationsCollection
-      .find({ recipientId: objId })
+      .find({ recipientId: recipientQuery })
       .sort({ createdAt: -1 })
       .skip(parseInt(skip) || 0)
       .limit(parseInt(limit) || 50)
       .toArray();
-    
-    const total = await notificationsCollection.countDocuments({ recipientId: objId });
-    
-    console.log('[GET] /api/notifications/:userId - Returned', notifications?.length || 0, 'of', total);
-    res.json({ success: true, data: notifications || [], total });
+
+    const sanitized = (Array.isArray(notifications) ? notifications : []).map(n => {
+      const type = n?.type != null ? String(n.type) : '';
+      const safe = { ...n };
+      if (type === 'message' || type === 'dm') safe.message = 'messaged you';
+      if (type === 'like') safe.message = 'liked your post';
+      if (type === 'comment') safe.message = 'commented on your post';
+      if (type === 'follow') safe.message = 'started following you';
+      if (type === 'mention') safe.message = 'mentioned you in a post';
+      if (type === 'tag') safe.message = 'tagged you in a post';
+      if (type === 'live') safe.message = 'started a live stream';
+      if (type === 'story' && !safe.message) safe.message = 'updated your story';
+      return safe;
+    });
+
+    const total = await notificationsCollection.countDocuments({ recipientId: recipientQuery });
+
+    console.log('[GET] /api/notifications/:userId - Returned', sanitized?.length || 0, 'of', total);
+    res.json({ success: true, data: sanitized || [], total });
   } catch (err) {
     console.error('[GET] /api/notifications/:userId error:', err.message, err.stack);
     res.status(500).json({ success: false, error: err.message, data: [] });
@@ -2675,36 +2970,92 @@ app.get('/api/notifications/:userId', async (req, res) => {
 });
 console.log('  ✅ /api/notifications/:userId (GET) loaded');
 
-// POST /api/notifications - Create notification (for likes, comments, follows)
-app.post('/api/notifications', async (req, res) => {
+app.patch('/api/notifications/read-all', verifyToken, async (req, res) => {
   try {
-    const { recipientId, senderId, type, postId, message } = req.body;
-    
+    const userId = String(req.userId || '');
+    const firebaseUidFromToken = req.user?.firebaseUid;
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const recipientIds = [String(userId)];
+    if (firebaseUidFromToken) recipientIds.push(String(firebaseUidFromToken));
+    const recipientObjId = mongoose.Types.ObjectId.isValid(userId) ? toObjectId(userId) : null;
+
+    const recipientQuery = {
+      $in: [
+        ...recipientIds,
+        ...(recipientObjId ? [recipientObjId] : [])
+      ]
+    };
+
+    const result = await notificationsCollection.updateMany(
+      { recipientId: recipientQuery, read: { $ne: true } },
+      { $set: { read: true, readAt: new Date() } }
+    );
+
+    res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+  } catch (err) {
+    console.error('[PATCH] /api/notifications/read-all error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/notifications/read-all (PATCH) loaded');
+
+app.post('/api/notifications', verifyToken, async (req, res) => {
+  try {
+    const { recipientId, type, postId, message, commentId, storyId, streamId, conversationId } = req.body;
+    const senderId = String(req.userId || '');
+
     if (!recipientId || !senderId || !type) {
       return res.status(400).json({ success: false, error: 'recipientId, senderId, type required' });
     }
-    
+
     // Don't create notification if recipient is sender
     if (recipientId === senderId) {
       return res.status(200).json({ success: true, message: 'Notification not created (self)' });
     }
-    
+
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
-    
+
+    const usersCollection = db.collection('users');
+    const senderUser = mongoose.Types.ObjectId.isValid(senderId)
+      ? await usersCollection.findOne({ _id: toObjectId(senderId) })
+      : null;
+    const senderName = senderUser?.displayName || senderUser?.name || 'Someone';
+    const senderAvatar = senderUser?.avatar || senderUser?.photoURL || null;
+
+    const safeType = type != null ? String(type) : '';
+    let safeMessage = typeof message === 'string' ? message : '';
+    if (safeType === 'message' || safeType === 'dm') safeMessage = 'messaged you';
+    if (safeType === 'like') safeMessage = 'liked your post';
+    if (safeType === 'comment') safeMessage = 'commented on your post';
+    if (safeType === 'follow') safeMessage = 'started following you';
+    if (safeType === 'mention') safeMessage = 'mentioned you in a post';
+    if (safeType === 'tag') safeMessage = 'tagged you in a post';
+    if (safeType === 'live') safeMessage = 'started a live stream';
+    if (safeType === 'story' && !safeMessage) safeMessage = 'updated your story';
+
     const notification = {
-      recipientId: toObjectId(recipientId),
-      senderId: toObjectId(senderId),
-      type, // 'like', 'comment', 'follow', 'mention'
-      postId: postId ? toObjectId(postId) : null,
-      message: message || `${type} notification`,
+      recipientId: String(recipientId),
+      senderId: String(senderId),
+      senderName,
+      senderAvatar,
+      type, // 'like', 'comment', 'follow', 'mention', 'tag', 'message', 'story', 'live'
+      postId: postId ? String(postId) : null,
+      commentId: commentId ? String(commentId) : null,
+      storyId: storyId ? String(storyId) : null,
+      streamId: streamId ? String(streamId) : null,
+      conversationId: conversationId ? String(conversationId) : null,
+      message: safeMessage || `${safeType} notification`,
       read: false,
       createdAt: new Date()
     };
-    
+
     const result = await notificationsCollection.insertOne(notification);
     notification._id = result.insertedId;
-    
+
     console.log('[POST] /api/notifications - Created:', type, 'for user:', recipientId);
     res.status(201).json({ success: true, data: notification });
   } catch (err) {
@@ -2715,23 +3066,35 @@ app.post('/api/notifications', async (req, res) => {
 console.log('  ✅ /api/notifications (POST) loaded');
 
 // PATCH /api/notifications/:notificationId/read - Mark notification as read
-app.patch('/api/notifications/:notificationId/read', async (req, res) => {
+app.patch('/api/notifications/:notificationId/read', verifyToken, async (req, res) => {
   try {
     const { notificationId } = req.params;
-    
+
+    const userId = String(req.userId || '');
+    const firebaseUidFromToken = req.user?.firebaseUid;
+    const idsToMatch = [String(userId)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
-    
+
+    const existing = await notificationsCollection.findOne({ _id: toObjectId(notificationId) });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Notification not found' });
+    }
+
+    const recipientId = existing?.recipientId != null ? String(existing.recipientId) : '';
+    const allowed = idsToMatch.includes(recipientId);
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
     const result = await notificationsCollection.findOneAndUpdate(
       { _id: toObjectId(notificationId) },
       { $set: { read: true, readAt: new Date() } },
       { returnDocument: 'after' }
     );
-    
-    if (!result.value) {
-      return res.status(404).json({ success: false, error: 'Notification not found' });
-    }
-    
+
     console.log('[PATCH] /api/notifications/:notificationId/read - Marked read');
     res.json({ success: true, data: result.value });
   } catch (err) {
@@ -2740,6 +3103,35 @@ app.patch('/api/notifications/:notificationId/read', async (req, res) => {
   }
 });
 console.log('  ✅ /api/notifications/:notificationId/read (PATCH) loaded');
+
+// PUT /api/users/:userId/push-token - Save Expo push token for current user
+app.put('/api/users/:userId/push-token', verifyToken, async (req, res) => {
+  try {
+    const { pushToken } = req.body;
+    const userId = String(req.userId || '');
+
+    if (!pushToken || typeof pushToken !== 'string') {
+      return res.status(400).json({ success: false, error: 'pushToken required' });
+    }
+
+    const User = mongoose.model('User');
+    const updated = await User.findOneAndUpdate(
+      { $or: [{ _id: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : null }, { firebaseUid: userId }, { uid: userId }] },
+      { $set: { pushToken, pushTokenUpdatedAt: new Date() } },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[PUT] /api/users/:userId/push-token error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/users/:userId/push-token (PUT) loaded');
 
 console.log('  ✅ Comments and privacy endpoints loaded');
 
@@ -2754,8 +3146,8 @@ console.log('✅ 404 handler registered');
 // ============= ERROR HANDLING =============
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  res.status(500).json({ 
-    success: false, 
+  res.status(500).json({
+    success: false,
     error: err.message || 'Internal server error',
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });

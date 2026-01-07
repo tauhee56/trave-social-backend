@@ -194,6 +194,26 @@ router.post('/:storyId/like', async (req, res) => {
 
     await story.save();
 
+    // Best-effort: notify story owner on like
+    try {
+      const ownerId = story.userId ? String(story.userId) : null;
+      const isLike = likeIndex === -1;
+      if (isLike && ownerId && ownerId !== String(userId)) {
+        const db = mongoose.connection.db;
+        await db.collection('notifications').insertOne({
+          recipientId: String(ownerId),
+          senderId: String(userId),
+          type: 'story',
+          storyId: String(storyId),
+          message: 'liked your story',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+    } catch (e) {
+      console.warn('[POST /stories/:storyId/like] Notification skipped:', e.message);
+    }
+
     console.log('[POST /stories/:storyId/like] Story liked/unliked:', storyId, 'by:', userId);
     res.json({ success: true, data: { likes: story.likes, likesCount: story.likes.length } });
   } catch (err) {
@@ -247,6 +267,24 @@ router.post('/:storyId/comments', async (req, res) => {
 
     story.comments.push(comment);
     await story.save();
+
+    // Best-effort: notify story owner on comment
+    try {
+      const ownerId = story.userId ? String(story.userId) : null;
+      if (ownerId && ownerId !== String(userId)) {
+        await db.collection('notifications').insertOne({
+          recipientId: String(ownerId),
+          senderId: String(userId),
+          type: 'story',
+          storyId: String(storyId),
+          message: 'commented on your story',
+          read: false,
+          createdAt: new Date()
+        });
+      }
+    } catch (e) {
+      console.warn('[POST /stories/:storyId/comments] Notification skipped:', e.message);
+    }
 
     console.log('[POST /stories/:storyId/comments] Comment added to story:', storyId);
     res.status(201).json({ success: true, data: comment });
