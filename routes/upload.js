@@ -9,6 +9,11 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
+const uploadStory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
 /**
  * Upload file to Cloudinary
  * @param {Buffer} fileBuffer - File buffer
@@ -16,7 +21,7 @@ const upload = multer({
  * @param {string} resourceType - 'image' or 'video'
  * @returns {Promise<string>} - Cloudinary URL
  */
-async function uploadToCloudinary(fileBuffer, folder, resourceType = 'auto') {
+async function uploadToCloudinary(fileBuffer, folder, resourceType = 'auto', options = {}) {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
@@ -33,7 +38,11 @@ async function uploadToCloudinary(fileBuffer, folder, resourceType = 'auto') {
           reject(error);
         } else {
           console.log('✅ Cloudinary upload success:', result.secure_url);
-          resolve(result.secure_url);
+          if (options && options.returnResult) {
+            resolve(result);
+          } else {
+            resolve(result.secure_url);
+          }
         }
       }
     );
@@ -84,20 +93,37 @@ router.post('/post', upload.single('file'), async (req, res) => {
 });
 
 // POST /api/upload/story - Upload story media
-router.post('/story', upload.single('file'), async (req, res) => {
+router.post('/story', uploadStory.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No file provided' });
     }
     
     const userId = req.body.userId || 'anonymous';
-    const mediaType = req.body.mediaType || 'auto';
+    const mediaTypeRaw = req.body.mediaType || 'auto';
+    const mediaType = mediaTypeRaw === 'video' ? 'video' : (mediaTypeRaw === 'image' ? 'image' : 'auto');
     const folder = `stories/${userId}`;
-    
-    const url = await uploadToCloudinary(req.file.buffer, folder, mediaType);
-    
+
+    const uploadRes = await uploadToCloudinary(req.file.buffer, folder, mediaType, { returnResult: true });
+
+    const url = uploadRes?.secure_url;
+    const publicId = uploadRes?.public_id;
+
+    let thumbnailUrl;
+    if (mediaType === 'video' && publicId) {
+      thumbnailUrl = cloudinary.url(publicId, {
+        resource_type: 'video',
+        format: 'jpg',
+        secure: true,
+        transformation: [
+          { width: 300, height: 300, crop: 'fill' },
+          { quality: 'auto' }
+        ]
+      });
+    }
+
     console.log(`✅ Story media uploaded for user ${userId}`);
-    res.json({ success: true, url, mediaType });
+    res.json({ success: true, url, mediaType, thumbnailUrl });
   } catch (err) {
     console.error('Error uploading story media:', err);
     res.status(500).json({ success: false, error: err.message });

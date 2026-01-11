@@ -9,6 +9,51 @@ console.log('📨 Loading conversations route...');
 // Get the Conversation model (already defined in models/Conversation.js and required in index.js)
 const Conversation = mongoose.model('Conversation');
 
+const findConversationByAnyId = async (id) => {
+  if (!id) return null;
+  return Conversation.findOne({
+    $or: [
+      { conversationId: String(id) },
+      { _id: mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null }
+    ]
+  });
+};
+
+const resolveUserIdVariants = async (id) => {
+  const User = mongoose.model('User');
+  const out = new Set([String(id)]);
+  try {
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const byId = await User.findById(id).select('_id firebaseUid uid');
+      if (byId?._id) out.add(String(byId._id));
+      if (byId?.firebaseUid) out.add(String(byId.firebaseUid));
+      if (byId?.uid) out.add(String(byId.uid));
+    }
+
+    const byAlt = await User.findOne({ $or: [{ firebaseUid: id }, { uid: id }] }).select('_id firebaseUid uid');
+    if (byAlt?._id) out.add(String(byAlt._id));
+    if (byAlt?.firebaseUid) out.add(String(byAlt.firebaseUid));
+    if (byAlt?.uid) out.add(String(byAlt.uid));
+  } catch {}
+  return Array.from(out);
+};
+
+const findThreadConversations = async (conversation) => {
+  const participants = Array.isArray(conversation?.participants) ? conversation.participants.map(String) : [];
+  if (participants.length !== 2) return [conversation];
+
+  const aIds = await resolveUserIdVariants(participants[0]);
+  const bIds = await resolveUserIdVariants(participants[1]);
+
+  return Conversation.find({
+    $and: [
+      { participants: { $in: aIds } },
+      { participants: { $in: bIds } },
+      { $expr: { $eq: [{ $size: '$participants' }, 2] } }
+    ]
+  });
+};
+
 // Get conversations for user with populated participant data
 router.get('/', verifyToken, async (req, res) => {
   try {
@@ -25,7 +70,10 @@ router.get('/', verifyToken, async (req, res) => {
     const idsToMatch = [String(userId)];
     if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
 
-    const conversations = await Conversation.find({ participants: { $in: idsToMatch } }).sort({ lastMessageAt: -1 });
+    const conversations = await Conversation.find({
+      participants: { $in: idsToMatch },
+      deletedBy: { $nin: idsToMatch }
+    }).sort({ lastMessageAt: -1 });
     
     console.log('[GET] /conversations - Found', conversations.length, 'conversations for user:', userId);
     conversations.forEach((c, i) => {
@@ -39,8 +87,12 @@ router.get('/', verifyToken, async (req, res) => {
     const enrichedConversations = await Promise.all(conversations.map(async (conversation) => {
       const convObj = conversation.toObject ? conversation.toObject() : conversation;
 
+      const archivedBy = Array.isArray(convObj?.archivedBy) ? convObj.archivedBy.map(String) : [];
+      const isArchived = archivedBy.some((id) => idsToMatch.includes(String(id)));
+
       // Get other participant (not current user)
-      const otherParticipantId = convObj.participants.find(p => p !== userId);
+      const participants = Array.isArray(convObj?.participants) ? convObj.participants.map(String) : [];
+      const otherParticipantId = participants.find(p => !idsToMatch.includes(String(p)));
 
       if (otherParticipantId) {
         const otherUser = await usersCollection.findOne({
@@ -53,6 +105,8 @@ router.get('/', verifyToken, async (req, res) => {
 
         return {
           ...convObj,
+          [`archived_${String(userId)}`]: isArchived,
+          isArchived,
           otherParticipant: {
             id: otherParticipantId,
             name: otherUser?.displayName || otherUser?.name || 'User',
@@ -61,7 +115,11 @@ router.get('/', verifyToken, async (req, res) => {
         };
       }
 
-      return convObj;
+      return {
+        ...convObj,
+        [`archived_${String(userId)}`]: isArchived,
+        isArchived,
+      };
     }));
 
     console.log('[GET] /conversations - Returning', enrichedConversations.length, 'enriched conversations');
@@ -69,6 +127,138 @@ router.get('/', verifyToken, async (req, res) => {
   } catch (err) {
     console.error('[GET /conversations] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Archive conversation for authenticated user (soft archive)
+router.post('/:id/archive', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+
+    if (!userIdFromToken) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const idsToMatch = [String(userIdFromToken)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    const conversation = await findConversationByAnyId(id);
+    if (!conversation) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    const participants = Array.isArray(conversation?.participants) ? conversation.participants.map(String) : [];
+    const allowed = idsToMatch.some(uid => participants.includes(String(uid)));
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const threadConvos = await findThreadConversations(conversation);
+    const convoIds = Array.isArray(threadConvos) && threadConvos.length > 0
+      ? threadConvos.map(c => c._id)
+      : [conversation._id];
+
+    await Conversation.updateMany(
+      { _id: { $in: convoIds } },
+      {
+        $addToSet: { archivedBy: { $each: idsToMatch } },
+        $pull: { deletedBy: { $in: idsToMatch } }
+      }
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[POST] /conversations/:id/archive - Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Unarchive conversation for authenticated user
+router.post('/:id/unarchive', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+
+    if (!userIdFromToken) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const idsToMatch = [String(userIdFromToken)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    const conversation = await findConversationByAnyId(id);
+    if (!conversation) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    const participants = Array.isArray(conversation?.participants) ? conversation.participants.map(String) : [];
+    const allowed = idsToMatch.some(uid => participants.includes(String(uid)));
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const threadConvos = await findThreadConversations(conversation);
+    const convoIds = Array.isArray(threadConvos) && threadConvos.length > 0
+      ? threadConvos.map(c => c._id)
+      : [conversation._id];
+
+    await Conversation.updateMany(
+      { _id: { $in: convoIds } },
+      { $pull: { archivedBy: { $in: idsToMatch } } }
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[POST] /conversations/:id/unarchive - Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete conversation for authenticated user (soft delete / hide from inbox)
+router.post('/:id/delete', verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+
+    if (!userIdFromToken) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const idsToMatch = [String(userIdFromToken)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    const conversation = await findConversationByAnyId(id);
+    if (!conversation) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    const participants = Array.isArray(conversation?.participants) ? conversation.participants.map(String) : [];
+    const allowed = idsToMatch.some(uid => participants.includes(String(uid)));
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const threadConvos = await findThreadConversations(conversation);
+    const convoIds = Array.isArray(threadConvos) && threadConvos.length > 0
+      ? threadConvos.map(c => c._id)
+      : [conversation._id];
+
+    await Conversation.updateMany(
+      { _id: { $in: convoIds } },
+      {
+        $addToSet: { deletedBy: { $each: idsToMatch } },
+        $pull: { archivedBy: { $in: idsToMatch } }
+      }
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[POST] /conversations/:id/delete - Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -382,17 +572,37 @@ router.post('/:id/messages', verifyToken, async (req, res) => {
         const senderName = senderUser?.displayName || senderUser?.name || 'Someone';
         const senderAvatar = senderUser?.avatar || senderUser?.photoURL || null;
 
-        await db.collection('notifications').insertOne({
-          recipientId: String(normalizedRecipientId),
-          senderId: String(normalizedSenderId),
-          senderName,
-          senderAvatar,
-          type: 'message',
-          conversationId: String(convo.conversationId || conversationId),
-          message: 'messaged you',
-          read: false,
-          createdAt: new Date()
-        });
+        const notificationsCollection = db.collection('notifications');
+        const convId = String(convo.conversationId || conversationId);
+        const now = new Date();
+
+        // Dedupe: keep only one unread message notification per (recipient, sender, conversation)
+        // If an unread one exists, update its timestamp + sender meta. Otherwise, insert a new one.
+        await notificationsCollection.updateOne(
+          {
+            recipientId: String(normalizedRecipientId),
+            senderId: String(normalizedSenderId),
+            type: 'message',
+            conversationId: convId,
+            read: { $ne: true }
+          },
+          {
+            $set: {
+              senderName,
+              senderAvatar,
+              message: 'messaged you',
+              createdAt: now
+            },
+            $setOnInsert: {
+              recipientId: String(normalizedRecipientId),
+              senderId: String(normalizedSenderId),
+              type: 'message',
+              conversationId: convId,
+              read: false
+            }
+          },
+          { upsert: true }
+        );
       }
     } catch (e) {
       console.warn('[POST] /:id/messages - Notification skipped:', e.message);

@@ -137,10 +137,18 @@ console.log('🔧 Loading router-based routes first...');
 
 // User routes - REGISTER FIRST for nested routes like /api/users/:userId/posts
 try {
-  app.use('/api/users', require('../routes/user'));
+  app.use('/api/users', require('../routes/users'));
   console.log('  ✅ /api/users (router) loaded - REGISTERED FIRST');
 } catch (err) {
   console.warn('  ⚠️ /api/users (router) error:', err.message);
+}
+
+// Conversations routes - MUST be registered before inline /api/conversations handler below
+try {
+  app.use('/api/conversations', require('../routes/conversations'));
+  console.log('  ✅ /api/conversations (router) loaded - REGISTERED FIRST');
+} catch (err) {
+  console.warn('  ⚠️ /api/conversations (router) error:', err.message);
 }
 
 // Then load inline routes
@@ -157,11 +165,32 @@ app.get('/api/live-streams', async (req, res) => {
       .sort({ createdAt: -1 })
       .toArray();
 
-    const normalized = (Array.isArray(streams) ? streams : []).map(s => ({
-      ...s,
-      id: s?._id ? String(s._id) : (s?.id ? String(s.id) : undefined),
-      _id: s?._id
-    }));
+    const normalized = (Array.isArray(streams) ? streams : []).map(s => {
+      const id = s?._id ? String(s._id) : (s?.id ? String(s.id) : undefined);
+      const isActive = typeof s?.isActive === 'boolean'
+        ? s.isActive
+        : (typeof s?.isLive === 'boolean' ? s.isLive : true);
+
+      const viewerCount = typeof s?.viewerCount === 'number'
+        ? s.viewerCount
+        : (Array.isArray(s?.viewers) ? s.viewers.length : 0);
+
+      const roomId = (typeof s?.roomId === 'string' && s.roomId)
+        ? s.roomId
+        : ((typeof s?.channelName === 'string' && s.channelName) ? s.channelName : undefined);
+
+      return {
+        ...s,
+        id,
+        _id: s?._id,
+        isActive,
+        isLive: typeof s?.isLive === 'boolean' ? s.isLive : isActive,
+        startedAt: s?.startedAt || s?.createdAt,
+        viewerCount,
+        roomId,
+        channelName: roomId || s?.channelName,
+      };
+    });
 
     return res.status(200).json({ success: true, streams: normalized });
   } catch (err) {
@@ -170,6 +199,49 @@ app.get('/api/live-streams', async (req, res) => {
   }
 });
 console.log('  ✅ /api/live-streams loaded');
+
+// GET /api/live-streams/:streamId - Get single live stream detail
+app.get('/api/live-streams/:streamId', async (req, res) => {
+  try {
+    const { streamId } = req.params;
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+
+    const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+
+    const id = stream?._id ? String(stream._id) : (stream?.id ? String(stream.id) : undefined);
+    const isActive = typeof stream?.isActive === 'boolean'
+      ? stream.isActive
+      : (typeof stream?.isLive === 'boolean' ? stream.isLive : true);
+    const viewerCount = typeof stream?.viewerCount === 'number'
+      ? stream.viewerCount
+      : (Array.isArray(stream?.viewers) ? stream.viewers.length : 0);
+    const roomId = (typeof stream?.roomId === 'string' && stream.roomId)
+      ? stream.roomId
+      : ((typeof stream?.channelName === 'string' && stream.channelName) ? stream.channelName : undefined);
+
+    return res.json({
+      success: true,
+      data: {
+        ...stream,
+        id,
+        _id: stream?._id,
+        isActive,
+        isLive: typeof stream?.isLive === 'boolean' ? stream.isLive : isActive,
+        startedAt: stream?.startedAt || stream?.createdAt,
+        viewerCount,
+        roomId,
+        channelName: roomId || stream?.channelName,
+      }
+    });
+  } catch (err) {
+    console.error('[GET] /api/live-streams/:streamId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Health check endpoint for monitoring and cold start detection
 app.get('/api/health', (req, res) => {
@@ -388,7 +460,7 @@ app.post('/api/posts', async (req, res) => {
 // POST /api/live-streams - Start new live stream
 app.post('/api/live-streams', async (req, res) => {
   try {
-    const { userId, title } = req.body;
+    const { userId, title, roomId, channelName, userName, userAvatar } = req.body;
     if (!userId || !title) {
       return res.status(400).json({ success: false, error: 'userId and title required' });
     }
@@ -396,12 +468,22 @@ app.post('/api/live-streams', async (req, res) => {
     const db = mongoose.connection.db;
     const livestreamsCollection = db.collection('livestreams');
 
+    const resolvedRoomId = (typeof roomId === 'string' && roomId)
+      ? roomId
+      : ((typeof channelName === 'string' && channelName) ? channelName : null);
+
     const newStream = {
       userId,
       title,
+      roomId: resolvedRoomId,
+      channelName: resolvedRoomId,
+      userName: typeof userName === 'string' ? userName : null,
+      userAvatar: typeof userAvatar === 'string' ? userAvatar : null,
       isActive: true,
+      isLive: true,
       viewers: [],
       viewerCount: 0,
+      startedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -435,9 +517,50 @@ app.post('/api/live-streams', async (req, res) => {
     }
 
     console.log('[POST] /api/live-streams - Stream started:', result.insertedId);
-    res.status(201).json({ success: true, id: result.insertedId, data: newStream });
+    res.status(201).json({ success: true, id: result.insertedId, data: { ...newStream, id: String(result.insertedId) } });
   } catch (err) {
     console.error('[POST] /api/live-streams error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/live-streams/:streamId/join - User joins stream
+app.post('/api/live-streams/:streamId/join', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { streamId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId required' });
+    }
+
+    const db = mongoose.connection.db;
+    const livestreamsCollection = db.collection('livestreams');
+
+    const stream = await livestreamsCollection.findOne({ _id: toObjectId(streamId) });
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+
+    const viewers = Array.isArray(stream.viewers) ? stream.viewers : [];
+    const updatedViewers = viewers.includes(userId) ? viewers : [...viewers, userId];
+
+    const updated = await livestreamsCollection.findOneAndUpdate(
+      { _id: toObjectId(streamId) },
+      {
+        $set: {
+          viewers: updatedViewers,
+          viewerCount: updatedViewers.length,
+          updatedAt: new Date()
+        }
+      },
+      { returnDocument: 'after' }
+    );
+
+    console.log('[POST] /api/live-streams/:streamId/join - User', userId, 'joined stream');
+    res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[POST] /api/live-streams/:streamId/join error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -882,8 +1005,8 @@ const optionalVerifyToken = (req, res, next) => {
   return next();
 };
 
-// GET /api/conversations - Get conversations for current user
-app.get('/api/conversations', verifyToken, async (req, res) => {
+// GET /api/conversations-legacy - Get conversations for current user
+app.get('/api/conversations-legacy', verifyToken, async (req, res) => {
   try {
     const userIdFromToken = req.userId;
     const userId = userIdFromToken;
@@ -1058,7 +1181,7 @@ app.get('/api/conversations', verifyToken, async (req, res) => {
     res.json({ success: true, data: [] });
   }
 });
-console.log('  ✅ /api/conversations loaded');
+console.log('  ✅ /api/conversations-legacy loaded');
 
 // DEBUG ENDPOINT: GET /api/debug/conversations-count - Check conversation count
 app.get('/api/debug/conversations-count', async (req, res) => {
@@ -1718,6 +1841,25 @@ app.get('/api/users/:uid', async (req, res) => {
     }
 
     // Ensure user has all expected fields
+    // Compute follow counts from Follow collection (source of truth)
+    let followersCount = 0;
+    let followingCount = 0;
+    try {
+      const Follow = mongoose.model('Follow');
+      const possibleIds = [
+        user?._id ? String(user._id) : null,
+        user?.firebaseUid ? String(user.firebaseUid) : null,
+        user?.uid ? String(user.uid) : null,
+      ].filter(Boolean);
+
+      followersCount = await Follow.countDocuments({ followingId: { $in: possibleIds } });
+      followingCount = await Follow.countDocuments({ followerId: { $in: possibleIds } });
+    } catch (e) {
+      // If Follow model isn't available for some reason, fall back to stored fields
+      followersCount = typeof user.followersCount === 'number' ? user.followersCount : 0;
+      followingCount = typeof user.followingCount === 'number' ? user.followingCount : 0;
+    }
+
     const userData = {
       _id: user._id,
       uid: user.uid,
@@ -1733,11 +1875,11 @@ app.get('/api/users/:uid', async (req, res) => {
       location: user.location,
       phone: user.phone,
       interests: user.interests,
-      followersCount: user.followersCount || (user.followers?.length || 0),
-      followingCount: user.followingCount || (user.following?.length || 0),
+      followersCount,
+      followingCount,
       postsCount: user.postsCount || 0,
-      followers: user.followers || [],
-      following: user.following || [],
+      followers: Array.isArray(user.followers) ? user.followers : [],
+      following: Array.isArray(user.following) ? user.following : [],
       isPrivate: user.isPrivate || false,
       approvedFollowers: user.approvedFollowers || [],
       createdAt: user.createdAt,
@@ -2227,14 +2369,6 @@ try {
 
 // User routes - JUST USERS ROUTER, NOT duplicate PUT/PATCH
 // ALREADY REGISTERED AT TOP - DO NOT DUPLICATE
-
-// Conversations routes
-try {
-  app.use('/api/conversations', require('../routes/conversations'));
-  console.log('  ✅ /api/conversations loaded');
-} catch (err) {
-  console.warn('  ⚠️ /api/conversations error:', err.message);
-}
 
 // Messages routes
 try {

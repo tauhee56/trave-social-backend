@@ -80,7 +80,7 @@ router.get('/', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
-    const { userId, userName, mediaUrl, mediaType, caption, locationData } = req.body;
+    const { userId, userName, mediaUrl, mediaType, caption, locationData, thumbnailUrl, thumbnail } = req.body;
 
     if (!userId || !mediaUrl) {
       return res.status(400).json({ success: false, error: 'userId and mediaUrl required' });
@@ -109,6 +109,7 @@ router.post('/', async (req, res) => {
 
     if (mediaType === 'video') {
       storyData.video = mediaUrl;
+      storyData.thumbnail = thumbnailUrl || thumbnail || null;
     } else {
       storyData.image = mediaUrl;
     }

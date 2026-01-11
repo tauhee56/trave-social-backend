@@ -38,9 +38,25 @@ router.post('/', async (req, res) => {
     // Best-effort: create follow notification
     try {
       const db = mongoose.connection.db;
+      const User = mongoose.model('User');
+
+      const followerQuery = { $or: [{ firebaseUid: followerId }, { uid: followerId }] };
+      if (mongoose.Types.ObjectId.isValid(followerId)) {
+        followerQuery.$or.push({ _id: new mongoose.Types.ObjectId(followerId) });
+      }
+
+      const followerUser = await User.findOne(followerQuery)
+        .select('displayName name avatar photoURL profilePicture')
+        .lean();
+
+      const senderName = followerUser?.displayName || followerUser?.name || 'Someone';
+      const senderAvatar = followerUser?.avatar || followerUser?.photoURL || followerUser?.profilePicture || null;
+
       await db.collection('notifications').insertOne({
         recipientId: String(followingId),
         senderId: String(followerId),
+        senderName,
+        senderAvatar,
         type: 'follow',
         message: 'started following you',
         read: false,
@@ -56,13 +72,13 @@ router.post('/', async (req, res) => {
     // Increment following count for follower
     await User.updateOne(
       { $or: [{ firebaseUid: followerId }, { _id: mongoose.Types.ObjectId.isValid(followerId) ? new mongoose.Types.ObjectId(followerId) : null }] },
-      { $inc: { following: 1 } }
+      { $inc: { followingCount: 1 } }
     );
 
     // Increment followers count for following user
     await User.updateOne(
       { $or: [{ firebaseUid: followingId }, { _id: mongoose.Types.ObjectId.isValid(followingId) ? new mongoose.Types.ObjectId(followingId) : null }] },
-      { $inc: { followers: 1 } }
+      { $inc: { followersCount: 1 } }
     );
 
     console.log('[POST /follow] Follow relationship created and counts updated');
@@ -102,13 +118,13 @@ router.delete('/', async (req, res) => {
     // Decrement following count for follower
     await User.updateOne(
       { $or: [{ firebaseUid: followerId }, { _id: mongoose.Types.ObjectId.isValid(followerId) ? new mongoose.Types.ObjectId(followerId) : null }] },
-      { $inc: { following: -1 } }
+      { $inc: { followingCount: -1 } }
     );
 
     // Decrement followers count for following user
     await User.updateOne(
       { $or: [{ firebaseUid: followingId }, { _id: mongoose.Types.ObjectId.isValid(followingId) ? new mongoose.Types.ObjectId(followingId) : null }] },
-      { $inc: { followers: -1 } }
+      { $inc: { followersCount: -1 } }
     );
 
     console.log('[DELETE /follow] Follow relationship deleted and counts updated');
@@ -157,7 +173,7 @@ router.get('/users/:userId/followers', async (req, res) => {
         { firebaseUid: { $in: followerIds } },
         { _id: { $in: followerIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } }
       ]
-    }).select('firebaseUid name username profilePicture');
+    }).select('firebaseUid displayName name username avatar photoURL profilePicture');
 
     // Check if current user follows each follower
     let currentUserFollowing = [];
@@ -174,11 +190,14 @@ router.get('/users/:userId/followers', async (req, res) => {
       const isFollowing = currentUserFollowing.some(f => f.followingId === uid);
       const isFollowingYou = true; // They are in followers list, so they follow you
 
+      const displayName = user.displayName || user.name || 'User';
+      const resolvedAvatar = user.avatar || user.photoURL || user.profilePicture || '';
+
       return {
         uid,
-        name: user.name || 'User',
+        name: displayName,
         username: user.username || '',
-        avatar: user.profilePicture || 'https://via.placeholder.com/100',
+        avatar: resolvedAvatar,
         isFollowing,
         isFollowingYou
       };
@@ -222,7 +241,7 @@ router.get('/users/:userId/following', async (req, res) => {
         { firebaseUid: { $in: followingIds } },
         { _id: { $in: followingIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } }
       ]
-    }).select('firebaseUid name username profilePicture');
+    }).select('firebaseUid displayName name username avatar photoURL profilePicture');
 
     // Check if they follow back (mutual)
     const followsBack = await Follow.find({
@@ -235,11 +254,14 @@ router.get('/users/:userId/following', async (req, res) => {
       const uid = user.firebaseUid || user._id.toString();
       const isFollowingYou = followsBack.some(f => f.followerId === uid);
 
+      const displayName = user.displayName || user.name || 'User';
+      const resolvedAvatar = user.avatar || user.photoURL || user.profilePicture || '';
+
       return {
         uid,
-        name: user.name || 'User',
+        name: displayName,
         username: user.username || '',
-        avatar: user.profilePicture || 'https://via.placeholder.com/100',
+        avatar: resolvedAvatar,
         isFollowing: true, // They are in following list
         isFollowingYou
       };
@@ -398,16 +420,21 @@ router.get('/users/:userId/blocked', async (req, res) => {
         { firebaseUid: { $in: blockedIds } },
         { _id: { $in: blockedIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } }
       ]
-    }).select('firebaseUid name username profilePicture');
+    }).select('firebaseUid displayName name username avatar photoURL profilePicture');
 
-    const userItems = users.map(user => ({
-      uid: user.firebaseUid || user._id.toString(),
-      name: user.name || 'User',
-      username: user.username || '',
-      avatar: user.profilePicture || 'https://via.placeholder.com/100',
-      isFollowing: false,
-      isFollowingYou: false
-    }));
+    const userItems = users.map(user => {
+      const displayName = user.displayName || user.name || 'User';
+      const resolvedAvatar = user.avatar || user.photoURL || user.profilePicture || '';
+
+      return {
+        uid: user.firebaseUid || user._id.toString(),
+        name: displayName,
+        username: user.username || '',
+        avatar: resolvedAvatar,
+        isFollowing: false,
+        isFollowingYou: false
+      };
+    });
 
     res.json({ success: true, data: userItems });
   } catch (err) {
@@ -448,16 +475,21 @@ router.get('/users/:userId/friends', async (req, res) => {
         { firebaseUid: { $in: friendIds } },
         { _id: { $in: friendIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } }
       ]
-    }).select('firebaseUid name username profilePicture');
+    }).select('firebaseUid displayName name username avatar photoURL profilePicture');
 
-    const userItems = users.map(user => ({
-      uid: user.firebaseUid || user._id.toString(),
-      name: user.name || 'User',
-      username: user.username || '',
-      avatar: user.profilePicture || 'https://via.placeholder.com/100',
-      isFollowing: true,
-      isFollowingYou: true
-    }));
+    const userItems = users.map(user => {
+      const displayName = user.displayName || user.name || 'User';
+      const resolvedAvatar = user.avatar || user.photoURL || user.profilePicture || '';
+
+      return {
+        uid: user.firebaseUid || user._id.toString(),
+        name: displayName,
+        username: user.username || '',
+        avatar: resolvedAvatar,
+        isFollowing: true,
+        isFollowingYou: true
+      };
+    });
 
     res.json({ success: true, data: userItems });
   } catch (err) {

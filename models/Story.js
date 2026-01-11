@@ -6,6 +6,7 @@ const storySchema = new mongoose.Schema({
   userAvatar: String,
   image: String,
   video: String,
+  thumbnail: String,
   caption: String,
   locationData: Object,
   views: [String],

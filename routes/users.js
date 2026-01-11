@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
+const { verifyToken } = require('../src/middleware/authMiddleware');
+
 // Use centralized User model (already loaded by auth.js or server initialization)
 let User;
 try {
@@ -66,6 +68,78 @@ router.get('/search', async (req, res) => {
   } catch (err) {
     console.error('[GET /search] Error:', err.message);
     res.status(500).json({ success: false, error: err.message, data: [] });
+  }
+});
+
+// GET /api/users/:userId/conversations/archived - Get archived conversations for the authenticated user
+router.get('/:userId/conversations/archived', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const userIdFromToken = req.userId;
+    const firebaseUidFromToken = req.user?.firebaseUid;
+    const idsToMatch = [String(userIdFromToken)];
+    if (firebaseUidFromToken) idsToMatch.push(String(firebaseUidFromToken));
+
+    if (!userIdFromToken) {
+      return res.status(401).json({ success: false, error: 'Unauthorized', data: [] });
+    }
+
+    // Always return the authenticated user's archived list.
+    // The URL param can be out-of-sync (e.g., client stores firebase uid while token uses Mongo _id).
+    if (userId && !idsToMatch.includes(String(userId))) {
+      console.warn('[GET /users/:userId/conversations/archived] userId param mismatch:', {
+        paramUserId: String(userId),
+        tokenUserId: String(userIdFromToken),
+        tokenFirebaseUid: firebaseUidFromToken ? String(firebaseUidFromToken) : null
+      });
+    }
+
+    const Conversation = mongoose.model('Conversation');
+
+    const conversations = await Conversation.find({
+      archivedBy: { $in: idsToMatch },
+      deletedBy: { $nin: idsToMatch }
+    }).sort({ lastMessageAt: -1 });
+
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection('users');
+
+    const enriched = await Promise.all(conversations.map(async (conversation) => {
+      const convObj = conversation.toObject ? conversation.toObject() : conversation;
+      const participants = Array.isArray(convObj?.participants) ? convObj.participants.map(String) : [];
+      const otherParticipantId = participants.find(p => !idsToMatch.includes(String(p)));
+
+      let otherUser = null;
+      if (otherParticipantId) {
+        otherUser = await usersCollection.findOne({
+          $or: [
+            { firebaseUid: otherParticipantId },
+            { uid: otherParticipantId },
+            { _id: mongoose.Types.ObjectId.isValid(otherParticipantId) ? new mongoose.Types.ObjectId(otherParticipantId) : null }
+          ]
+        });
+      }
+
+      const resolvedOtherUserId = otherUser?._id ? String(otherUser._id) : otherParticipantId;
+
+      return {
+        ...convObj,
+        id: convObj.id || convObj._id,
+        isArchived: true,
+        otherUser: otherParticipantId ? {
+          id: resolvedOtherUserId,
+          displayName: otherUser?.displayName || otherUser?.name || 'User',
+          name: otherUser?.displayName || otherUser?.name || 'User',
+          avatar: otherUser?.avatar || otherUser?.photoURL || null
+        } : null
+      };
+    }));
+
+    return res.json({ success: true, data: enriched || [] });
+  } catch (err) {
+    console.error('[GET /users/:userId/conversations/archived] Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, data: [] });
   }
 });
 
@@ -582,4 +656,6 @@ router.get('/:userId/saved', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+module.exports = router;
 

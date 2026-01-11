@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const ConversationSchema = new mongoose.Schema({
   conversationId: { type: String, unique: true, sparse: true, index: true }, // String ID like "user1_user2"
   participants: { type: [String], index: true }, // user IDs - indexed for fast queries
+  archivedBy: { type: [String], default: [] },
+  deletedBy: { type: [String], default: [] },
   messages: [{
     id: String,
     senderId: String,
