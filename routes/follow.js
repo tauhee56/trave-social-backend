@@ -13,6 +13,31 @@ const followSchema = new mongoose.Schema({
 
 const Follow = mongoose.models.Follow || mongoose.model('Follow', followSchema);
 
+const uniqStrings = (arr) => Array.from(new Set((arr || []).filter(Boolean).map(v => String(v))));
+
+async function resolveUserIdentifiers(inputId) {
+  const raw = String(inputId);
+  const User = mongoose.model('User');
+
+  try {
+    let user = null;
+    if (mongoose.Types.ObjectId.isValid(raw)) {
+      user = await User.findById(raw).select('firebaseUid').lean();
+    }
+    if (!user) {
+      user = await User.findOne({ firebaseUid: raw }).select('firebaseUid').lean();
+    }
+
+    const canonicalId = user?._id ? String(user._id) : raw;
+    const firebaseUid = user?.firebaseUid ? String(user.firebaseUid) : null;
+    const candidates = uniqStrings([raw, canonicalId, firebaseUid]);
+
+    return { raw, canonicalId, firebaseUid, candidates };
+  } catch {
+    return { raw, canonicalId: raw, firebaseUid: null, candidates: uniqStrings([raw]) };
+  }
+}
+
 // Follow a user (POST /api/follow)
 router.post('/', async (req, res) => {
   try {
@@ -24,15 +49,24 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, error: 'followerId and followingId required' });
     }
 
+    const follower = await resolveUserIdentifiers(followerId);
+    const following = await resolveUserIdentifiers(followingId);
+
+    const followerIdCanonical = follower.canonicalId;
+    const followingIdCanonical = following.canonicalId;
+
     // Check if already following
-    const existingFollow = await Follow.findOne({ followerId, followingId });
+    const existingFollow = await Follow.findOne({
+      followerId: { $in: follower.candidates },
+      followingId: { $in: following.candidates }
+    });
     if (existingFollow) {
       console.log('[POST /follow] Already following');
       return res.json({ success: true, message: 'Already following' });
     }
 
     // Create follow relationship
-    const follow = new Follow({ followerId, followingId });
+    const follow = new Follow({ followerId: followerIdCanonical, followingId: followingIdCanonical });
     await follow.save();
 
     // Best-effort: create follow notification
@@ -40,9 +74,9 @@ router.post('/', async (req, res) => {
       const db = mongoose.connection.db;
       const User = mongoose.model('User');
 
-      const followerQuery = { $or: [{ firebaseUid: followerId }, { uid: followerId }] };
-      if (mongoose.Types.ObjectId.isValid(followerId)) {
-        followerQuery.$or.push({ _id: new mongoose.Types.ObjectId(followerId) });
+      const followerQuery = { $or: [{ firebaseUid: follower.raw }, { uid: follower.raw }] };
+      if (mongoose.Types.ObjectId.isValid(followerIdCanonical)) {
+        followerQuery.$or.push({ _id: new mongoose.Types.ObjectId(followerIdCanonical) });
       }
 
       const followerUser = await User.findOne(followerQuery)
@@ -53,8 +87,8 @@ router.post('/', async (req, res) => {
       const senderAvatar = followerUser?.avatar || followerUser?.photoURL || followerUser?.profilePicture || null;
 
       await db.collection('notifications').insertOne({
-        recipientId: String(followingId),
-        senderId: String(followerId),
+        recipientId: String(followingIdCanonical),
+        senderId: String(followerIdCanonical),
         senderName,
         senderAvatar,
         type: 'follow',
@@ -71,13 +105,13 @@ router.post('/', async (req, res) => {
 
     // Increment following count for follower
     await User.updateOne(
-      { $or: [{ firebaseUid: followerId }, { _id: mongoose.Types.ObjectId.isValid(followerId) ? new mongoose.Types.ObjectId(followerId) : null }] },
+      { $or: [{ firebaseUid: follower.raw }, { _id: mongoose.Types.ObjectId.isValid(followerIdCanonical) ? new mongoose.Types.ObjectId(followerIdCanonical) : null }] },
       { $inc: { followingCount: 1 } }
     );
 
     // Increment followers count for following user
     await User.updateOne(
-      { $or: [{ firebaseUid: followingId }, { _id: mongoose.Types.ObjectId.isValid(followingId) ? new mongoose.Types.ObjectId(followingId) : null }] },
+      { $or: [{ firebaseUid: following.raw }, { _id: mongoose.Types.ObjectId.isValid(followingIdCanonical) ? new mongoose.Types.ObjectId(followingIdCanonical) : null }] },
       { $inc: { followersCount: 1 } }
     );
 
@@ -102,9 +136,21 @@ router.delete('/', async (req, res) => {
       return res.status(400).json({ success: false, error: 'followerId and followingId required' });
     }
 
+    const follower = await resolveUserIdentifiers(followerId);
+    const following = await resolveUserIdentifiers(followingId);
+
+    const followerIdCanonical = follower.canonicalId;
+    const followingIdCanonical = following.canonicalId;
+
     // Delete follow relationship
     console.log('[DELETE /follow] Attempting to delete follow relationship...');
-    const result = await Follow.deleteOne({ followerId, followingId });
+    let result = await Follow.deleteOne({ followerId: followerIdCanonical, followingId: followingIdCanonical });
+    if (result.deletedCount === 0) {
+      result = await Follow.deleteOne({
+        followerId: { $in: follower.candidates },
+        followingId: { $in: following.candidates }
+      });
+    }
     console.log('[DELETE /follow] Delete result:', result);
 
     if (result.deletedCount === 0) {
@@ -117,13 +163,13 @@ router.delete('/', async (req, res) => {
 
     // Decrement following count for follower
     await User.updateOne(
-      { $or: [{ firebaseUid: followerId }, { _id: mongoose.Types.ObjectId.isValid(followerId) ? new mongoose.Types.ObjectId(followerId) : null }] },
+      { $or: [{ firebaseUid: follower.raw }, { _id: mongoose.Types.ObjectId.isValid(followerIdCanonical) ? new mongoose.Types.ObjectId(followerIdCanonical) : null }] },
       { $inc: { followingCount: -1 } }
     );
 
     // Decrement followers count for following user
     await User.updateOne(
-      { $or: [{ firebaseUid: followingId }, { _id: mongoose.Types.ObjectId.isValid(followingId) ? new mongoose.Types.ObjectId(followingId) : null }] },
+      { $or: [{ firebaseUid: following.raw }, { _id: mongoose.Types.ObjectId.isValid(followingIdCanonical) ? new mongoose.Types.ObjectId(followingIdCanonical) : null }] },
       { $inc: { followersCount: -1 } }
     );
 
@@ -144,7 +190,17 @@ router.get('/status', async (req, res) => {
       return res.status(400).json({ success: false, error: 'followerId and followingId required' });
     }
 
-    const follow = await Follow.findOne({ followerId, followingId });
+    const follower = await resolveUserIdentifiers(followerId);
+    const following = await resolveUserIdentifiers(followingId);
+
+    let follow = await Follow.findOne({ followerId: follower.canonicalId, followingId: following.canonicalId });
+    if (!follow) {
+      follow = await Follow.findOne({
+        followerId: { $in: follower.candidates },
+        followingId: { $in: following.candidates }
+      });
+    }
+
     res.json({ success: true, isFollowing: !!follow });
   } catch (err) {
     console.error('[GET /follow/status] Error:', err.message);
@@ -158,8 +214,10 @@ router.get('/users/:userId/followers', async (req, res) => {
     const { userId } = req.params;
     const currentUserId = req.query.currentUserId; // For checking if current user follows them
 
+    const targetUser = await resolveUserIdentifiers(userId);
+
     // Get all followers
-    const followers = await Follow.find({ followingId: userId });
+    const followers = await Follow.find({ followingId: { $in: targetUser.candidates } });
     const followerIds = followers.map(f => f.followerId);
 
     if (followerIds.length === 0) {
@@ -173,21 +231,31 @@ router.get('/users/:userId/followers', async (req, res) => {
         { firebaseUid: { $in: followerIds } },
         { _id: { $in: followerIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } }
       ]
-    }).select('firebaseUid displayName name username avatar photoURL profilePicture');
+    }).select('firebaseUid displayName name username avatar photoURL profilePicture').lean();
 
     // Check if current user follows each follower
     let currentUserFollowing = [];
     if (currentUserId) {
+      const current = await resolveUserIdentifiers(currentUserId);
+      const followingIdCandidates = Array.from(
+        new Set(
+          users
+            .flatMap((u) => [u?._id ? String(u._id) : null, u?.firebaseUid ? String(u.firebaseUid) : null])
+            .filter(Boolean)
+        )
+      );
+
       currentUserFollowing = await Follow.find({
-        followerId: currentUserId,
-        followingId: { $in: followerIds }
+        followerId: { $in: current.candidates },
+        followingId: { $in: followingIdCandidates }
       });
     }
 
     // Map to user items with follow status
     const userItems = users.map(user => {
-      const uid = user.firebaseUid || user._id.toString();
-      const isFollowing = currentUserFollowing.some(f => f.followingId === uid);
+      const uid = user._id ? String(user._id) : (user.firebaseUid ? String(user.firebaseUid) : '');
+      const idCandidates = [uid, user.firebaseUid ? String(user.firebaseUid) : null].filter(Boolean);
+      const isFollowing = currentUserFollowing.some(f => idCandidates.includes(String(f.followingId)));
       const isFollowingYou = true; // They are in followers list, so they follow you
 
       const displayName = user.displayName || user.name || 'User';
@@ -195,6 +263,7 @@ router.get('/users/:userId/followers', async (req, res) => {
 
       return {
         uid,
+        firebaseUid: user.firebaseUid || '',
         name: displayName,
         username: user.username || '',
         avatar: resolvedAvatar,
@@ -226,8 +295,10 @@ router.get('/users/:userId/following', async (req, res) => {
     const { userId } = req.params;
     const currentUserId = req.query.currentUserId; // For checking mutual follows
 
+    const targetUser = await resolveUserIdentifiers(userId);
+
     // Get all following
-    const following = await Follow.find({ followerId: userId });
+    const following = await Follow.find({ followerId: { $in: targetUser.candidates } });
     const followingIds = following.map(f => f.followingId);
 
     if (followingIds.length === 0) {
@@ -241,24 +312,43 @@ router.get('/users/:userId/following', async (req, res) => {
         { firebaseUid: { $in: followingIds } },
         { _id: { $in: followingIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } }
       ]
-    }).select('firebaseUid displayName name username avatar photoURL profilePicture');
+    }).select('firebaseUid displayName name username avatar photoURL profilePicture').lean();
+
+    // Resolve target user's canonical + firebase ids so follow-back works with legacy mixed ids
+    const targetUserIdCandidates = Array.from(
+      new Set([
+        String(userId),
+        targetUser?._id ? String(targetUser._id) : null,
+        targetUser?.firebaseUid ? String(targetUser.firebaseUid) : null,
+      ].filter(Boolean))
+    );
+
+    const followerIdCandidates = Array.from(
+      new Set(
+        users
+          .flatMap((u) => [u?._id ? String(u._id) : null, u?.firebaseUid ? String(u.firebaseUid) : null])
+          .filter(Boolean)
+      )
+    );
 
     // Check if they follow back (mutual)
     const followsBack = await Follow.find({
-      followerId: { $in: followingIds },
-      followingId: userId
+      followerId: { $in: followerIdCandidates },
+      followingId: { $in: targetUserIdCandidates }
     });
 
     // Map to user items with follow status
     const userItems = users.map(user => {
-      const uid = user.firebaseUid || user._id.toString();
-      const isFollowingYou = followsBack.some(f => f.followerId === uid);
+      const uid = user._id ? String(user._id) : (user.firebaseUid ? String(user.firebaseUid) : '');
+      const idCandidates = [uid, user.firebaseUid ? String(user.firebaseUid) : null].filter(Boolean);
+      const isFollowingYou = followsBack.some(f => idCandidates.includes(String(f.followerId)));
 
       const displayName = user.displayName || user.name || 'User';
       const resolvedAvatar = user.avatar || user.photoURL || user.profilePicture || '';
 
       return {
         uid,
+        firebaseUid: user.firebaseUid || '',
         name: displayName,
         username: user.username || '',
         avatar: resolvedAvatar,
@@ -284,19 +374,29 @@ router.post('/request', async (req, res) => {
       return res.status(400).json({ success: false, error: 'fromUserId and toUserId required' });
     }
 
+    const from = await resolveUserIdentifiers(fromUserId);
+    const to = await resolveUserIdentifiers(toUserId);
+
     // Check if request already exists
-    const existingRequest = await FollowRequest.findOne({ fromUserId, toUserId, status: 'pending' });
+    const existingRequest = await FollowRequest.findOne({
+      fromUserId: { $in: from.candidates },
+      toUserId: { $in: to.candidates },
+      status: 'pending'
+    });
     if (existingRequest) {
       return res.json({ success: false, error: 'Follow request already sent', alreadyRequested: true });
     }
 
     // Check if already following
-    const existingFollow = await Follow.findOne({ followerId: fromUserId, followingId: toUserId });
+    const existingFollow = await Follow.findOne({
+      followerId: { $in: from.candidates },
+      followingId: { $in: to.candidates }
+    });
     if (existingFollow) {
       return res.json({ success: false, error: 'Already following this user', alreadyFollowing: true });
     }
 
-    const followRequest = new FollowRequest({ fromUserId, toUserId });
+    const followRequest = new FollowRequest({ fromUserId: from.canonicalId, toUserId: to.canonicalId });
     await followRequest.save();
     console.log('[Follow Request] Created:', followRequest);
     res.json({ success: true, data: followRequest });
@@ -322,9 +422,12 @@ router.post('/request/:requestId/accept', async (req, res) => {
     }
 
     // Create follow relationship
+    const from = await resolveUserIdentifiers(followRequest.fromUserId);
+    const to = await resolveUserIdentifiers(followRequest.toUserId);
+
     const follow = new Follow({
-      followerId: followRequest.fromUserId,
-      followingId: followRequest.toUserId
+      followerId: from.canonicalId,
+      followingId: to.canonicalId
     });
     await follow.save();
 
