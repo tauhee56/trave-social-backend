@@ -354,6 +354,183 @@ app.get('/api/posts/location-count', async (req, res) => {
 });
 console.log('  ✅ /api/posts/location-count loaded');
 
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizePostLocation(postObj) {
+  const loc = (postObj && postObj.locationData && postObj.locationData.name) ? postObj.locationData.name : postObj.location;
+  return (typeof loc === 'string') ? loc.trim() : '';
+}
+
+function isPostVisibleToViewer(postObj, viewerId) {
+  if (!postObj) return false;
+  const isPrivate = !!postObj.isPrivate;
+  if (!isPrivate) return true;
+  if (!viewerId) return false;
+
+  const authorId = String(postObj.userId || '');
+  if (authorId && String(viewerId) === authorId) return true;
+  const allowed = Array.isArray(postObj.allowedFollowers) ? postObj.allowedFollowers.map(String) : [];
+  return allowed.includes(String(viewerId));
+}
+
+app.get('/api/locations/suggest', async (req, res) => {
+  try {
+    const qRaw = typeof req.query.q === 'string' ? req.query.q : '';
+    const q = qRaw.trim();
+    const limit = Math.min(parseInt(String(req.query.limit || '10'), 10) || 10, 25);
+
+    if (!q) return res.json({ success: true, data: [] });
+
+    const Post = mongoose.model('Post');
+    const regex = new RegExp(escapeRegExp(q), 'i');
+
+    const results = await Post.aggregate([
+      {
+        $addFields: {
+          _locName: {
+            $ifNull: ['$locationData.name', '$location']
+          }
+        }
+      },
+      {
+        $match: {
+          $and: [
+            { _locName: { $ne: null } },
+            { _locName: { $ne: '' } },
+            { _locName: { $regex: regex } }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: '$_locName',
+          count: { $sum: 1 },
+          verifiedCount: {
+            $sum: {
+              $cond: [{ $eq: ['$locationData.verified', true] }, 1, 0]
+            }
+          }
+        }
+      },
+      { $sort: { count: -1 } },
+      { $limit: limit }
+    ]).catch(() => []);
+
+    const data = (Array.isArray(results) ? results : [])
+      .map((r) => ({
+        name: typeof r?._id === 'string' ? r._id : String(r?._id || ''),
+        count: typeof r?.count === 'number' ? r.count : 0,
+        verifiedCount: typeof r?.verifiedCount === 'number' ? r.verifiedCount : 0,
+      }))
+      .filter((r) => r.name);
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('[GET] /api/locations/suggest error:', err.message);
+    return res.status(200).json({ success: true, data: [] });
+  }
+});
+
+app.get('/api/locations/meta', async (req, res) => {
+  try {
+    const locationRaw = typeof req.query.location === 'string' ? req.query.location : '';
+    const location = locationRaw.trim();
+    const viewerId = req.headers.userid || req.query.viewerId || null;
+
+    if (!location) return res.status(400).json({ success: false, error: 'location query parameter required' });
+
+    const Post = mongoose.model('Post');
+    const exact = new RegExp(`^${escapeRegExp(location)}$`, 'i');
+    const query = {
+      $or: [
+        { 'locationData.name': { $regex: exact } },
+        { location: { $regex: exact } }
+      ]
+    };
+
+    const posts = await Post.find(query)
+      .select('userId isPrivate allowedFollowers location locationData')
+      .limit(5000)
+      .catch(() => []);
+
+    const visible = (Array.isArray(posts) ? posts : [])
+      .map(p => (p && p.toObject ? p.toObject() : p))
+      .filter(p => isPostVisibleToViewer(p, viewerId));
+
+    const postCount = visible.length;
+    const verifiedVisits = visible.filter(p => p?.locationData?.verified).length;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        location,
+        postCount,
+        visits: postCount,
+        verifiedVisits,
+      }
+    });
+  } catch (err) {
+    console.error('[GET] /api/locations/meta error:', err.message);
+    return res.status(200).json({ success: true, data: { postCount: 0, visits: 0, verifiedVisits: 0 } });
+  }
+});
+
+app.get('/api/posts/by-location', async (req, res) => {
+  try {
+    const locationRaw = typeof req.query.location === 'string' ? req.query.location : '';
+    const location = locationRaw.trim();
+    const skip = parseInt(String(req.query.skip || '0'), 10) || 0;
+    const limit = Math.min(parseInt(String(req.query.limit || '20'), 10) || 20, 50);
+    const viewerId = req.headers.userid || req.query.viewerId || null;
+
+    if (!location) return res.status(400).json({ success: false, error: 'location query parameter required', data: [] });
+
+    const Post = mongoose.model('Post');
+    const exact = new RegExp(`^${escapeRegExp(location)}$`, 'i');
+    const query = {
+      $or: [
+        { 'locationData.name': { $regex: exact } },
+        { location: { $regex: exact } }
+      ]
+    };
+
+    const rawPosts = await Post.find(query)
+      .sort({ createdAt: -1 })
+      .skip(Math.max(skip, 0))
+      .limit(limit)
+      .catch(() => []);
+
+    const enriched = (Array.isArray(rawPosts) ? rawPosts : [])
+      .map(p => (p && p.toObject ? p.toObject() : p))
+      .map(postObj => {
+        let likesCount = postObj.likesCount;
+        const likesArray = postObj.likes || [];
+        const calculatedCount = Array.isArray(likesArray) ? likesArray.length : (typeof likesArray === 'object' ? Object.keys(likesArray).length : 0);
+        if (!likesCount || likesCount === undefined || likesCount === 0) likesCount = calculatedCount;
+
+        let commentCount = postObj.commentCount !== undefined ? postObj.commentCount : postObj.commentsCount;
+        if (commentCount === undefined || commentCount === null) commentCount = 0;
+
+        return {
+          ...postObj,
+          likesCount,
+          commentCount,
+          location: postObj.location || normalizePostLocation(postObj),
+          isPrivate: postObj.isPrivate || false,
+          allowedFollowers: postObj.allowedFollowers || []
+        };
+      })
+      .filter(postObj => isPostVisibleToViewer(postObj, viewerId));
+
+    return res.status(200).json({ success: true, data: enriched });
+  } catch (err) {
+    console.error('[GET] /api/posts/by-location error:', err.message);
+    return res.status(200).json({ success: true, data: [] });
+  }
+});
+
 // POST /api/posts - Create new post
 app.post('/api/posts', async (req, res) => {
   try {
