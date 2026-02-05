@@ -253,19 +253,25 @@ router.put('/:userId', async (req, res) => {
 router.get('/:userId/posts', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { requesterUserId } = req.query; // Current user ID if available
+    const {
+      requesterUserId: requesterUserIdRaw,
+      viewerId: viewerIdRaw,
+      skip: skipRaw,
+      limit: limitRaw,
+    } = req.query;
+
+    const requesterUserId = (typeof requesterUserIdRaw === 'string' && requesterUserIdRaw)
+      ? requesterUserIdRaw
+      : (typeof viewerIdRaw === 'string' ? viewerIdRaw : undefined);
+
+    const skip = Number.isFinite(Number(skipRaw)) ? Math.max(0, Number(skipRaw)) : 0;
+    const limit = Number.isFinite(Number(limitRaw)) ? Math.min(100, Math.max(1, Number(limitRaw))) : 20;
     
     // Get posts collection
     const db = mongoose.connection.db;
     const postsCollection = db.collection('posts');
     const usersCollection = db.collection('users');
     const followsCollection = db.collection('follows');
-    
-    // Find posts by userId (could be MongoDB ObjectId or Firebase UID)
-    const posts = await postsCollection
-      .find({ userId: userId })
-      .sort({ createdAt: -1 })
-      .toArray();
     
     // Check if user is private
     const targetUser = await usersCollection.findOne({
@@ -280,6 +286,14 @@ router.get('/:userId/posts', async (req, res) => {
     if (targetUser?.isPrivate) {
       // Allow if: requester is the user themselves, or requester follows this user
       if (requesterUserId && requesterUserId !== userId) {
+        const isSelf =
+          requesterUserId === userId ||
+          (targetUser?.firebaseUid && requesterUserId === String(targetUser.firebaseUid)) ||
+          (targetUser?._id && requesterUserId === String(targetUser._id));
+
+        if (isSelf) {
+          // allowed
+        } else {
         // Check if requester follows this user
         const follows = await followsCollection.findOne({
           followerId: requesterUserId,
@@ -290,13 +304,38 @@ router.get('/:userId/posts', async (req, res) => {
           // Requester doesn't follow and isn't the user, deny access
           return res.json({ success: true, data: [] });
         }
+        }
       } else if (!requesterUserId) {
         // No requester ID provided and user is private, deny access
         return res.json({ success: true, data: [] });
       }
     }
-    
-    res.json({ success: true, data: posts || [] });
+
+    // Find posts by userId (could be MongoDB ObjectId or Firebase UID)
+    const postsQuery = {
+      $or: [
+        { userId: userId },
+        { userId: String(userId) },
+      ]
+    };
+
+    const posts = await postsCollection
+      .find(postsQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    const normalized = (Array.isArray(posts) ? posts : []).map((p) => {
+      const id = p?._id ? String(p._id) : (p?.id ? String(p.id) : undefined);
+      return {
+        ...p,
+        id,
+        _id: p?._id,
+      };
+    });
+
+    res.json({ success: true, data: normalized });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message, data: [] });
   }

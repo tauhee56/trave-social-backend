@@ -363,10 +363,79 @@ function normalizePostLocation(postObj) {
   return (typeof loc === 'string') ? loc.trim() : '';
 }
 
+function normalizeLocationKey(val) {
+  return String(val || '').trim().toLowerCase();
+}
+
+function uniqueLocationKeys(keys) {
+  const out = [];
+  const seen = new Set();
+  for (const k of Array.isArray(keys) ? keys : []) {
+    const n = normalizeLocationKey(k);
+    if (!n) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+function buildLocationKeysFromPayload(location, locationData, explicitKeys) {
+  const keys = [];
+
+  if (Array.isArray(explicitKeys)) {
+    keys.push(...explicitKeys);
+  }
+
+  if (locationData && typeof locationData === 'object') {
+    keys.push(locationData.name);
+    keys.push(locationData.neighborhood);
+    keys.push(locationData.city);
+    keys.push(locationData.country);
+    keys.push(locationData.countryCode);
+
+    const addr = typeof locationData.address === 'string' ? locationData.address : '';
+    if (addr) {
+      const parts = addr.split(',').map(p => p.trim()).filter(Boolean);
+      if (parts.length >= 1) keys.push(parts[0]);
+      if (parts.length >= 2) keys.push(parts[1]);
+      if (parts.length >= 1) keys.push(parts[parts.length - 1]);
+    }
+  }
+
+  keys.push(location);
+
+  const normalized = uniqueLocationKeys(keys);
+
+  const countryCode = normalizeLocationKey(locationData && locationData.countryCode);
+  const country = normalizeLocationKey(locationData && locationData.country);
+  if (countryCode === 'gb' || country === 'uk' || country === 'united kingdom') {
+    if (!normalized.includes('uk')) normalized.push('uk');
+    if (!normalized.includes('united kingdom')) normalized.push('united kingdom');
+  }
+
+  return uniqueLocationKeys(normalized);
+}
+
+function formatLocationLabel(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower === 'uk') return 'UK';
+  if (lower === 'united kingdom') return 'United Kingdom';
+  if (/[A-Z]/.test(raw)) return raw;
+  return lower
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 function isPostVisibleToViewer(postObj, viewerId) {
   if (!postObj) return false;
   const isPrivate = !!postObj.isPrivate;
   if (!isPrivate) return true;
+
   if (!viewerId) return false;
 
   const authorId = String(postObj.userId || '');
@@ -388,43 +457,87 @@ app.get('/api/locations/suggest', async (req, res) => {
 
     const results = await Post.aggregate([
       {
-        $addFields: {
-          _locName: {
-            $ifNull: ['$locationData.name', '$location']
-          }
-        }
-      },
-      {
-        $match: {
-          $and: [
-            { _locName: { $ne: null } },
-            { _locName: { $ne: '' } },
-            { _locName: { $regex: regex } }
+        $facet: {
+          keys: [
+            { $match: { locationKeys: { $exists: true, $ne: [] } } },
+            { $unwind: '$locationKeys' },
+            { $match: { locationKeys: { $regex: regex } } },
+            {
+              $group: {
+                _id: '$locationKeys',
+                count: { $sum: 1 },
+                verifiedCount: {
+                  $sum: {
+                    $cond: [{ $eq: ['$locationData.verified', true] }, 1, 0]
+                  }
+                }
+              }
+            },
+            { $sort: { count: -1 } },
+            { $limit: limit }
+          ],
+          names: [
+            {
+              $addFields: {
+                _locName: {
+                  $ifNull: ['$locationData.name', '$location']
+                }
+              }
+            },
+            {
+              $match: {
+                $and: [
+                  { _locName: { $ne: null } },
+                  { _locName: { $ne: '' } },
+                  { _locName: { $regex: regex } }
+                ]
+              }
+            },
+            {
+              $group: {
+                _id: '$_locName',
+                count: { $sum: 1 },
+                verifiedCount: {
+                  $sum: {
+                    $cond: [{ $eq: ['$locationData.verified', true] }, 1, 0]
+                  }
+                }
+              }
+            },
+            { $sort: { count: -1 } },
+            { $limit: limit }
           ]
         }
-      },
-      {
-        $group: {
-          _id: '$_locName',
-          count: { $sum: 1 },
-          verifiedCount: {
-            $sum: {
-              $cond: [{ $eq: ['$locationData.verified', true] }, 1, 0]
-            }
-          }
-        }
-      },
-      { $sort: { count: -1 } },
-      { $limit: limit }
+      }
     ]).catch(() => []);
 
-    const data = (Array.isArray(results) ? results : [])
+    const facet = Array.isArray(results) && results.length > 0 ? results[0] : { keys: [], names: [] };
+    const merged = [...(Array.isArray(facet.keys) ? facet.keys : []), ...(Array.isArray(facet.names) ? facet.names : [])];
+    const byName = new Map();
+    for (const r of merged) {
+      const name = typeof r?._id === 'string' ? r._id : String(r?._id || '');
+      if (!name) continue;
+      if (!byName.has(name)) {
+        byName.set(name, {
+          name,
+          count: typeof r?.count === 'number' ? r.count : 0,
+          verifiedCount: typeof r?.verifiedCount === 'number' ? r.verifiedCount : 0,
+        });
+      } else {
+        const prev = byName.get(name);
+        prev.count = Math.max(prev.count, typeof r?.count === 'number' ? r.count : 0);
+        prev.verifiedCount = Math.max(prev.verifiedCount, typeof r?.verifiedCount === 'number' ? r.verifiedCount : 0);
+      }
+    }
+
+    const data = Array.from(byName.values())
       .map((r) => ({
-        name: typeof r?._id === 'string' ? r._id : String(r?._id || ''),
-        count: typeof r?.count === 'number' ? r.count : 0,
-        verifiedCount: typeof r?.verifiedCount === 'number' ? r.verifiedCount : 0,
+        ...r,
+        name: formatLocationLabel(r.name),
       }))
-      .filter((r) => r.name);
+      .filter((r) => r.name)
+      .sort((a, b) => (b.count || 0) - (a.count || 0))
+      .slice(0, limit);
 
     return res.json({ success: true, data });
   } catch (err) {
@@ -443,10 +556,17 @@ app.get('/api/locations/meta', async (req, res) => {
 
     const Post = mongoose.model('Post');
     const exact = new RegExp(`^${escapeRegExp(location)}$`, 'i');
+    const contains = new RegExp(escapeRegExp(location), 'i');
+    const key = normalizeLocationKey(location);
     const query = {
       $or: [
+        { locationKeys: key },
         { 'locationData.name': { $regex: exact } },
-        { location: { $regex: exact } }
+        { location: { $regex: exact } },
+        { 'locationData.address': { $regex: contains } },
+        { 'locationData.city': { $regex: exact } },
+        { 'locationData.country': { $regex: exact } },
+        { 'locationData.countryCode': { $regex: exact } }
       ]
     };
 
@@ -481,6 +601,7 @@ app.get('/api/posts/by-location', async (req, res) => {
   try {
     const locationRaw = typeof req.query.location === 'string' ? req.query.location : '';
     const location = locationRaw.trim();
+
     const skip = parseInt(String(req.query.skip || '0'), 10) || 0;
     const limit = Math.min(parseInt(String(req.query.limit || '20'), 10) || 20, 50);
     const viewerId = req.headers.userid || req.query.viewerId || null;
@@ -489,10 +610,17 @@ app.get('/api/posts/by-location', async (req, res) => {
 
     const Post = mongoose.model('Post');
     const exact = new RegExp(`^${escapeRegExp(location)}$`, 'i');
+    const contains = new RegExp(escapeRegExp(location), 'i');
+    const key = normalizeLocationKey(location);
     const query = {
       $or: [
+        { locationKeys: key },
         { 'locationData.name': { $regex: exact } },
-        { location: { $regex: exact } }
+        { location: { $regex: exact } },
+        { 'locationData.address': { $regex: contains } },
+        { 'locationData.city': { $regex: exact } },
+        { 'locationData.country': { $regex: exact } },
+        { 'locationData.countryCode': { $regex: exact } }
       ]
     };
 
@@ -534,7 +662,7 @@ app.get('/api/posts/by-location', async (req, res) => {
 // POST /api/posts - Create new post
 app.post('/api/posts', async (req, res) => {
   try {
-    const { userId, content, caption, mediaUrls, imageUrls, location, locationData, mediaType, category, hashtags, mentions, taggedUserIds } = req.body;
+    const { userId, content, caption, mediaUrls, imageUrls, location, locationData, locationKeys, mediaType, category, hashtags, mentions, taggedUserIds } = req.body;
 
     // Accept both 'content' and 'caption' for compatibility
     const finalContent = content || caption || '';
@@ -563,6 +691,7 @@ app.post('/api/posts', async (req, res) => {
       mediaUrls: images || [],
       location: location || null,
       locationData: locationData || {},
+      locationKeys: buildLocationKeysFromPayload(location || '', locationData || {}, locationKeys),
       mediaType: mediaType || 'image',
       category: category || null,
       hashtags: hashtags || [],
