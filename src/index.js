@@ -151,6 +151,14 @@ try {
   console.warn('  ⚠️ /api/conversations (router) error:', err.message);
 }
 
+// Comments routes - Register before inline routes to handle /api/posts/:postId/comments
+try {
+  app.use('/api/posts', require('../routes/comments'));
+  console.log('  ✅ /api/posts/comments (router) loaded - REGISTERED FIRST');
+} catch (err) {
+  console.warn('  ⚠️ /api/posts/comments (router) error:', err.message);
+}
+
 // Then load inline routes
 console.log('🔧 Loading critical inline GET routes...');
 
@@ -2903,7 +2911,10 @@ app.patch('/api/posts/:postId/comments/:commentId', async (req, res) => {
     // Check if comment exists and belongs to user
     const comment = await commentsCollection.findOne({
       _id: toObjectId(commentId),
-      postId: postId
+      $or: [
+        { postId: postId },
+        { postId: toObjectId(postId) }
+      ]
     });
 
     if (!comment) {
@@ -2950,15 +2961,31 @@ app.delete('/api/posts/:postId/comments/:commentId', async (req, res) => {
     // Check if comment exists and belongs to user
     const comment = await commentsCollection.findOne({
       _id: toObjectId(commentId),
-      postId: postId
+      $or: [
+        { postId: postId },
+        { postId: toObjectId(postId) }
+      ]
     });
 
     if (!comment) {
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
 
-    if (comment.userId !== userId) {
-      return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own comments' });
+    let isPostOwner = false;
+    try {
+      const Post = mongoose.model('Post');
+      const post = await Post.findById(postId);
+      const postOwnerId = post?.userId != null ? String(post.userId) : null;
+      isPostOwner = postOwnerId != null && postOwnerId === String(userId);
+    } catch (e) {
+      isPostOwner = false;
+    }
+
+    if (comment.userId !== userId && !isPostOwner) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized - you can only delete your own comments (or the post owner can moderate)'
+      });
     }
 
     await commentsCollection.deleteOne({ _id: toObjectId(commentId) });
@@ -3011,10 +3038,61 @@ app.post('/api/posts/:postId/comments/:commentId/like', async (req, res) => {
 });
 console.log('  ✅ /api/posts/:postId/comments/:commentId/like (POST) loaded');
 
+// POST /api/posts/:postId/comments/:commentId/like/toggle - Toggle like (Instagram style)
+app.post('/api/posts/:postId/comments/:commentId/like/toggle', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const { commentId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+
+    const comment = await commentsCollection.findOne({ _id: toObjectId(commentId) });
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+
+    const likes = Array.isArray(comment.likes) ? [...comment.likes] : [];
+    const idx = likes.indexOf(userId);
+
+    let liked = false;
+    if (idx >= 0) {
+      likes.splice(idx, 1);
+      liked = false;
+    } else {
+      likes.push(userId);
+      liked = true;
+    }
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { likes, likesCount: likes.length } },
+      { returnDocument: 'after' }
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        liked,
+        likes: updated.value.likes,
+        likesCount: updated.value.likesCount
+      }
+    });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments/:commentId/like/toggle error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/like/toggle (POST) loaded');
+
 // POST /api/posts/:postId/comments/:commentId/reactions - Add reaction to comment
 app.post('/api/posts/:postId/comments/:commentId/reactions', async (req, res) => {
   try {
-    const { userId, reaction } = req.body;
+    const { userId, reaction, removeExisting } = req.body;
     const { postId, commentId } = req.params;
 
     if (!userId || !reaction) {
@@ -3029,9 +3107,22 @@ app.post('/api/posts/:postId/comments/:commentId/reactions', async (req, res) =>
       return res.status(404).json({ success: false, error: 'Comment not found' });
     }
 
-    const reactions = comment.reactions || {};
-    reactions[reaction] = reactions[reaction] || [];
+    const reactions = (comment.reactions && typeof comment.reactions === 'object' && !Array.isArray(comment.reactions))
+      ? { ...comment.reactions }
+      : {};
 
+    const shouldRemoveExisting = removeExisting === true;
+    if (shouldRemoveExisting) {
+      for (const [emoji, users] of Object.entries(reactions)) {
+        if (!Array.isArray(users)) continue;
+        reactions[emoji] = users.filter(u => String(u) !== String(userId));
+        if (Array.isArray(reactions[emoji]) && reactions[emoji].length === 0) {
+          delete reactions[emoji];
+        }
+      }
+    }
+
+    reactions[reaction] = Array.isArray(reactions[reaction]) ? reactions[reaction] : [];
     if (!reactions[reaction].includes(userId)) {
       reactions[reaction].push(userId);
     }
@@ -3051,65 +3142,349 @@ app.post('/api/posts/:postId/comments/:commentId/reactions', async (req, res) =>
 });
 console.log('  ✅ /api/posts/:postId/comments/:commentId/reactions (POST) loaded');
 
-// POST /api/posts/:postId/like - Like a post
-app.post('/api/posts/:postId/like', async (req, res) => {
+// DELETE /api/posts/:postId/comments/:commentId/reactions/:userId - Remove user's reaction
+app.delete('/api/posts/:postId/comments/:commentId/reactions/:userId', async (req, res) => {
   try {
-    const { postId } = req.params;
-    const { userId } = req.body;
+    const { commentId, userId } = req.params;
 
-    console.log('[POST] /api/posts/:postId/like called - postId:', postId, 'userId:', userId);
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+
+    const comment = await commentsCollection.findOne({ _id: toObjectId(commentId) });
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+
+    const reactions = (comment.reactions && typeof comment.reactions === 'object' && !Array.isArray(comment.reactions))
+      ? { ...comment.reactions }
+      : {};
+
+    for (const [emoji, users] of Object.entries(reactions)) {
+      if (!Array.isArray(users)) continue;
+      reactions[emoji] = users.filter(u => String(u) !== String(userId));
+      if (Array.isArray(reactions[emoji]) && reactions[emoji].length === 0) {
+        delete reactions[emoji];
+      }
+    }
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { reactions } },
+      { returnDocument: 'after' }
+    );
+
+    return res.json({ success: true, data: { reactions: updated.value.reactions } });
+  } catch (err) {
+    console.error('[DELETE] /api/posts/:postId/comments/:commentId/reactions/:userId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/reactions/:userId (DELETE) loaded');
+
+// POST /api/posts/:postId/comments/:commentId/replies - Add reply to comment
+app.post('/api/posts/:postId/comments/:commentId/replies', async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    const { userId, text, userName, userAvatar } = req.body;
+
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'Missing userId or text' });
+    }
+
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+
+    const reply = {
+      _id: new mongoose.Types.ObjectId(),
+      userId: String(userId),
+      userName: userName || 'Anonymous',
+      userAvatar: userAvatar || null,
+      text,
+      createdAt: new Date(),
+      editedAt: null,
+      likes: [],
+      likesCount: 0,
+      reactions: {}
+    };
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      {
+        _id: toObjectId(commentId),
+        $or: [
+          { postId: postId },
+          { postId: toObjectId(postId) }
+        ]
+      },
+      {
+        $push: { replies: reply },
+        $set: { updatedAt: new Date() }
+      },
+      { returnDocument: 'after' }
+    );
+
+    if (!updated.value) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+
+    return res.status(201).json({ success: true, id: reply._id, data: reply });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments/:commentId/replies error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/replies (POST) loaded');
+
+// PATCH /api/posts/:postId/comments/:commentId/replies/:replyId - Edit reply
+app.patch('/api/posts/:postId/comments/:commentId/replies/:replyId', async (req, res) => {
+  try {
+    const { postId, commentId, replyId } = req.params;
+    const { userId, text } = req.body;
+
+    if (!userId || !text) {
+      return res.status(400).json({ success: false, error: 'Missing userId or text' });
+    }
+
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+
+    const comment = await commentsCollection.findOne({
+      _id: toObjectId(commentId),
+      $or: [
+        { postId: postId },
+        { postId: toObjectId(postId) }
+      ]
+    });
+
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
+    }
+
+    const replyObjId = toObjectId(replyId);
+    const replies = Array.isArray(comment.replies) ? comment.replies : [];
+    const reply = replies.find(r => {
+      if (replyObjId && r?._id) return String(r._id) === String(replyObjId);
+      return String(r?._id) === String(replyId);
+    });
+
+    if (!reply) {
+      return res.status(404).json({ success: false, error: 'Reply not found' });
+    }
+
+    if (String(reply.userId) !== String(userId)) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only edit your own replies' });
+    }
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      {
+        $set: {
+          'replies.$[r].text': text,
+          'replies.$[r].editedAt': new Date(),
+          updatedAt: new Date()
+        }
+      },
+      {
+        arrayFilters: [{ 'r._id': replyObjId || replyId }],
+        returnDocument: 'after'
+      }
+    );
+
+    return res.json({ success: true, data: updated.value });
+  } catch (err) {
+    console.error('[PATCH] /api/posts/:postId/comments/:commentId/replies/:replyId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/replies/:replyId (PATCH) loaded');
+
+// DELETE /api/posts/:postId/comments/:commentId/replies/:replyId - Delete reply (author OR post owner moderation)
+app.delete('/api/posts/:postId/comments/:commentId/replies/:replyId', async (req, res) => {
+  try {
+    const { postId, commentId, replyId } = req.params;
+    const { userId } = req.body;
 
     if (!userId) {
       return res.status(400).json({ success: false, error: 'userId is required' });
     }
 
-    const Post = mongoose.model('Post');
-    const post = await Post.findById(postId);
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
 
-    console.log('[POST] /api/posts/:postId/like - Found post:', !!post, 'existing likes:', post?.likes?.length || 0);
+    const comment = await commentsCollection.findOne({
+      _id: toObjectId(commentId),
+      $or: [
+        { postId: postId },
+        { postId: toObjectId(postId) }
+      ]
+    });
 
-    if (!post) {
-      return res.status(404).json({ success: false, error: 'Post not found' });
+    if (!comment) {
+      return res.status(404).json({ success: false, error: 'Comment not found' });
     }
 
-    if (!post.likes) post.likes = [];
+    const replyObjId = toObjectId(replyId);
+    const replies = Array.isArray(comment.replies) ? comment.replies : [];
+    const reply = replies.find(r => {
+      if (replyObjId && r?._id) return String(r._id) === String(replyObjId);
+      return String(r?._id) === String(replyId);
+    });
 
-    // Check if already liked
-    if (post.likes.includes(userId)) {
-      console.log('[POST] /api/posts/:postId/like - Already liked');
-      return res.status(400).json({ success: false, error: 'Already liked' });
+    if (!reply) {
+      return res.status(404).json({ success: false, error: 'Reply not found' });
     }
 
-    post.likes.push(userId);
-    const savedPost = await post.save();
-
-    // Best-effort: create like notification for post owner
+    let isPostOwner = false;
     try {
-      const postOwnerId = post.userId ? String(post.userId) : null;
-      if (postOwnerId && postOwnerId !== String(userId)) {
-        const db = mongoose.connection.db;
-        await db.collection('notifications').insertOne({
-          recipientId: String(postOwnerId),
-          senderId: String(userId),
-          type: 'like',
-          postId: String(postId),
-          message: 'liked your post',
-          read: false,
-          createdAt: new Date()
-        });
-      }
+      const Post = mongoose.model('Post');
+      const post = await Post.findById(postId);
+      const postOwnerId = post?.userId != null ? String(post.userId) : null;
+      isPostOwner = postOwnerId != null && postOwnerId === String(userId);
     } catch (e) {
-      console.warn('[POST] /api/posts/:postId/like - Skipped notification:', e.message);
+      isPostOwner = false;
     }
 
-    console.log('[POST] /api/posts/:postId/like - User', userId, 'liked post', postId, 'new total:', savedPost.likes.length);
-    return res.json({ success: true, data: { likes: savedPost.likes, total: savedPost.likes.length } });
+    if (String(reply.userId) !== String(userId) && !isPostOwner) {
+      return res.status(403).json({ success: false, error: 'Unauthorized - you can only delete your own replies (or post owner can moderate)' });
+    }
+
+    const pullQuery = replyObjId ? { _id: replyObjId } : { _id: replyId };
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      {
+        $pull: { replies: pullQuery },
+        $set: { updatedAt: new Date() }
+      },
+      { returnDocument: 'after' }
+    );
+
+    return res.json({ success: true, data: updated.value });
   } catch (err) {
-    console.error('[POST] /api/posts/:postId/like error:', err.message);
+    console.error('[DELETE] /api/posts/:postId/comments/:commentId/replies/:replyId error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-console.log('  ✅ /api/posts/:postId/like (POST) loaded');
+console.log('  ✅ /api/posts/:postId/comments/:commentId/replies/:replyId (DELETE) loaded');
+
+// POST /api/posts/:postId/comments/:commentId/replies/:replyId/like/toggle - Toggle like on reply
+app.post('/api/posts/:postId/comments/:commentId/replies/:replyId/like/toggle', async (req, res) => {
+  try {
+    const { postId, commentId, replyId } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) return res.status(400).json({ success: false, error: 'userId is required' });
+
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    const comment = await commentsCollection.findOne({
+      _id: toObjectId(commentId),
+      $or: [{ postId: postId }, { postId: toObjectId(postId) }]
+    });
+    if (!comment) return res.status(404).json({ success: false, error: 'Comment not found' });
+
+    const replyObjId = toObjectId(replyId);
+    const replies = Array.isArray(comment.replies) ? comment.replies : [];
+    const reply = replies.find(r => (replyObjId && r?._id) ? String(r._id) === String(replyObjId) : String(r?._id) === String(replyId));
+    if (!reply) return res.status(404).json({ success: false, error: 'Reply not found' });
+
+    const likes = Array.isArray(reply.likes) ? [...reply.likes] : [];
+    const idx = likes.indexOf(String(userId));
+    const liked = idx < 0;
+    if (idx >= 0) likes.splice(idx, 1); else likes.push(String(userId));
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { 'replies.$[r].likes': likes, 'replies.$[r].likesCount': likes.length, updatedAt: new Date() } },
+      { arrayFilters: [{ 'r._id': replyObjId || replyId }], returnDocument: 'after' }
+    );
+
+    return res.json({ success: true, data: { liked, likes, likesCount: likes.length, comment: updated.value } });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments/:commentId/replies/:replyId/like/toggle error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/replies/:replyId/like/toggle (POST) loaded');
+
+// POST /api/posts/:postId/comments/:commentId/replies/:replyId/reactions - Add reaction to reply
+app.post('/api/posts/:postId/comments/:commentId/replies/:replyId/reactions', async (req, res) => {
+  try {
+    const { postId, commentId, replyId } = req.params;
+    const { userId, reaction, removeExisting } = req.body;
+    if (!userId || !reaction) return res.status(400).json({ success: false, error: 'userId and reaction required' });
+
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    const comment = await commentsCollection.findOne({
+      _id: toObjectId(commentId),
+      $or: [{ postId: postId }, { postId: toObjectId(postId) }]
+    });
+    if (!comment) return res.status(404).json({ success: false, error: 'Comment not found' });
+
+    const replyObjId = toObjectId(replyId);
+    const replies = Array.isArray(comment.replies) ? comment.replies : [];
+    const reply = replies.find(r => (replyObjId && r?._id) ? String(r._id) === String(replyObjId) : String(r?._id) === String(replyId));
+    if (!reply) return res.status(404).json({ success: false, error: 'Reply not found' });
+
+    const reactions = (reply.reactions && typeof reply.reactions === 'object' && !Array.isArray(reply.reactions)) ? { ...reply.reactions } : {};
+    if (removeExisting === true) {
+      for (const [emoji, users] of Object.entries(reactions)) {
+        if (!Array.isArray(users)) continue;
+        reactions[emoji] = users.filter(u => String(u) !== String(userId));
+        if (reactions[emoji].length === 0) delete reactions[emoji];
+      }
+    }
+    reactions[reaction] = Array.isArray(reactions[reaction]) ? reactions[reaction] : [];
+    if (!reactions[reaction].includes(String(userId))) reactions[reaction].push(String(userId));
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { 'replies.$[r].reactions': reactions, updatedAt: new Date() } },
+      { arrayFilters: [{ 'r._id': replyObjId || replyId }], returnDocument: 'after' }
+    );
+    return res.json({ success: true, data: { reactions, comment: updated.value } });
+  } catch (err) {
+    console.error('[POST] /api/posts/:postId/comments/:commentId/replies/:replyId/reactions error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/replies/:replyId/reactions (POST) loaded');
+
+// DELETE /api/posts/:postId/comments/:commentId/replies/:replyId/reactions/:userId - Remove user's reaction from reply
+app.delete('/api/posts/:postId/comments/:commentId/replies/:replyId/reactions/:userId', async (req, res) => {
+  try {
+    const { postId, commentId, replyId, userId } = req.params;
+    const db = mongoose.connection.db;
+    const commentsCollection = db.collection('comments');
+    const comment = await commentsCollection.findOne({
+      _id: toObjectId(commentId),
+      $or: [{ postId: postId }, { postId: toObjectId(postId) }]
+    });
+    if (!comment) return res.status(404).json({ success: false, error: 'Comment not found' });
+
+    const replyObjId = toObjectId(replyId);
+    const replies = Array.isArray(comment.replies) ? comment.replies : [];
+    const reply = replies.find(r => (replyObjId && r?._id) ? String(r._id) === String(replyObjId) : String(r?._id) === String(replyId));
+    if (!reply) return res.status(404).json({ success: false, error: 'Reply not found' });
+
+    const reactions = (reply.reactions && typeof reply.reactions === 'object' && !Array.isArray(reply.reactions)) ? { ...reply.reactions } : {};
+    for (const [emoji, users] of Object.entries(reactions)) {
+      if (!Array.isArray(users)) continue;
+      reactions[emoji] = users.filter(u => String(u) !== String(userId));
+      if (reactions[emoji].length === 0) delete reactions[emoji];
+    }
+
+    const updated = await commentsCollection.findOneAndUpdate(
+      { _id: toObjectId(commentId) },
+      { $set: { 'replies.$[r].reactions': reactions, updatedAt: new Date() } },
+      { arrayFilters: [{ 'r._id': replyObjId || replyId }], returnDocument: 'after' }
+    );
+    return res.json({ success: true, data: { reactions, comment: updated.value } });
+  } catch (err) {
+    console.error('[DELETE] /api/posts/:postId/comments/:commentId/replies/:replyId/reactions/:userId error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+console.log('  ✅ /api/posts/:postId/comments/:commentId/replies/:replyId/reactions/:userId (DELETE) loaded');
 
 // DELETE /api/posts/:postId/like - Unlike a post
 app.delete('/api/posts/:postId/like', async (req, res) => {
