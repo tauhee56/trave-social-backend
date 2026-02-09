@@ -167,10 +167,22 @@ router.delete('/', async (req, res) => {
       { $inc: { followingCount: -1 } }
     );
 
+    // Clamp to prevent negative counts (best-effort)
+    await User.updateOne(
+      { $or: [{ firebaseUid: follower.raw }, { _id: mongoose.Types.ObjectId.isValid(followerIdCanonical) ? new mongoose.Types.ObjectId(followerIdCanonical) : null }] },
+      { $max: { followingCount: 0 } }
+    );
+
     // Decrement followers count for following user
     await User.updateOne(
       { $or: [{ firebaseUid: following.raw }, { _id: mongoose.Types.ObjectId.isValid(followingIdCanonical) ? new mongoose.Types.ObjectId(followingIdCanonical) : null }] },
       { $inc: { followersCount: -1 } }
+    );
+
+    // Clamp to prevent negative counts (best-effort)
+    await User.updateOne(
+      { $or: [{ firebaseUid: following.raw }, { _id: mongoose.Types.ObjectId.isValid(followingIdCanonical) ? new mongoose.Types.ObjectId(followingIdCanonical) : null }] },
+      { $max: { followersCount: 0 } }
     );
 
     console.log('[DELETE /follow] Follow relationship deleted and counts updated');
@@ -430,6 +442,21 @@ router.post('/request/:requestId/accept', async (req, res) => {
       followingId: to.canonicalId
     });
     await follow.save();
+
+    // Update follower/following counts in User model
+    const User = mongoose.model('User');
+
+    // Increment following count for requester
+    await User.updateOne(
+      { $or: [{ firebaseUid: from.raw }, { _id: mongoose.Types.ObjectId.isValid(from.canonicalId) ? new mongoose.Types.ObjectId(from.canonicalId) : null }] },
+      { $inc: { followingCount: 1 } }
+    );
+
+    // Increment followers count for private user
+    await User.updateOne(
+      { $or: [{ firebaseUid: to.raw }, { _id: mongoose.Types.ObjectId.isValid(to.canonicalId) ? new mongoose.Types.ObjectId(to.canonicalId) : null }] },
+      { $inc: { followersCount: 1 } }
+    );
 
     // Update request status
     followRequest.status = 'accepted';
